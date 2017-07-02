@@ -1,0 +1,14 @@
+node_modules
+rethinkdb_data
+*.log
+.DS_Store
+/dist
+
+# Logs
+logs
+*.log
+
+# Runtime data
+pids
+*.pid
+*.seed
