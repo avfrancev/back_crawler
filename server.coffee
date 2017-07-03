@@ -1,25 +1,27 @@
-express = require 'express'
-cors = require 'cors'
-bodyParser = require 'body-parser'
-{ createServer } = require 'http'
-{ execute, subscribe } = require 'graphql'
+express                             = require 'express'
+cors                                = require 'cors'
+bodyParser                          = require 'body-parser'
+bcrypt                              = require('bcrypt')
+jwt                                 = require("jwt-simple")
+{ createServer }                    = require 'http'
+{ execute, subscribe }              = require 'graphql'
 { graphqlExpress, graphiqlExpress } = require 'graphql-server-express'
-{ makeExecutableSchema } = require 'graphql-tools'
-
-{ SubscriptionServer } = require 'subscriptions-transport-ws'
-{ PubSub } = require 'graphql-subscriptions';
-
-r = require('rethinkdbdash')({db: 'horizon'})
+{ makeExecutableSchema }            = require 'graphql-tools'
+{ SubscriptionServer }              = require 'subscriptions-transport-ws'
+{ PubSub }                          = require 'graphql-subscriptions';
 
 pubsub = new PubSub()
+r = require('rethinkdbdash')({db: 'horizon'})
 
-config =
-	DBName:             'horizon'
-	PORT:               3020
-	SUBSCRIPTIONS_PATH: '/subscriptions';
-	# pubsub
 
-crawler = require('./crawler/index.coffee')(config)
+cfg = require './config.coffee'
+
+
+crawler = require('./crawler/index.coffee')(cfg)
+
+
+
+
 
 # setTimeout ->
 # 	crawler.parseItem('a8f18010-45a6-4e3d-bee6-df8da404806b')
@@ -210,24 +212,43 @@ app.use '/graphiql', graphiqlExpress(
 	# subscriptionsEndpoint: SUBSCRIPTIONS_PATH
 	)
 
-users = [
-	{
-		id: 1
-		name: 'John'
-		email: 'john@mail.com'
-		password: 'john123'
-	}
-	{
-		id: 2
-		name: 'Sarah'
-		email: 'sarah@mail.com'
-		password: 'sarah123'
-	}
-]
-
+auth = require("./auth.coffee")(r)
+app.use auth.initialize()
 
 app.get '/', (req, res) ->
 	res.json status: 'My API is alive!'
+	return
+
+
+app.get '/auth/user', auth.authenticate(), (req, res) ->
+	delete req.user.hash
+	res.status(200).json
+		status: 'success'
+		data: req.user
+
+	return
+
+app.post '/auth/login', (req, res) ->
+	if req.body.username and req.body.password
+		r.table('users').filter(
+			provider: 'local'
+			username: req.body.username
+		).pluck('id', 'hash').then (user) ->
+			# hash = bcrypt.hashSync('admin', 11)
+			console.log bcrypt.compareSync req.body.password, user[0].hash
+			if user[0] and bcrypt.compareSync req.body.password, user[0].hash
+				payload = id: user[0].id
+				token = jwt.encode(payload, cfg.jwtSecret)
+				user[0].token = token
+				res.json
+					status: 'success'
+					data:
+						id: user[0].id
+						token: token
+			else
+				res.sendStatus 401
+	else
+		res.sendStatus 401
 	return
 
 
@@ -242,11 +263,11 @@ new SubscriptionServer(
 		schema,
 	},
 	{
-		path: config.SUBSCRIPTIONS_PATH
+		path: cfg.SUBSCRIPTIONS_PATH
 		server: server
 	}
 )
 
-server.listen config.PORT, ->
-	console.log "API Server is now running on http://localhost:#{config.PORT}/graphql"
-	console.log "API Subscriptions server is now running on ws://localhost:#{config.PORT}#{config.SUBSCRIPTIONS_PATH}"
+server.listen cfg.PORT, ->
+	console.log "API Server is now running on http://localhost:#{cfg.PORT}/graphql"
+	console.log "API Subscriptions server is now running on ws://localhost:#{cfg.PORT}#{cfg.SUBSCRIPTIONS_PATH}"
