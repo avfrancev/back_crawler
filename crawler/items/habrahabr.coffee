@@ -22,7 +22,7 @@ module.exports =
 			)
 		post: ->
 			return new Gurkha(
-				image:
+				images:
 					'$rule': '.content img'
 					'$sanitizer': ($elem) ->
 						return $elem.attr('src')

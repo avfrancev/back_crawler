@@ -6,13 +6,13 @@ module.exports =
 				return new Gurkha(
 					{
 						posts:
-							'$rule': '#content article'
+							'$rule': '.news-item'
 							title:
-								'$rule': '.entry-title a'
+								'$rule': '.col-md-7 h2 a'
 								'$sanitizer': ($elem) ->
 									$elem.text()
 							link:
-								'$rule': '.entry-title a'
+								'$rule': '.col-md-7 h2 a'
 								'$sanitizer': ($elem) ->
 									$elem.attr('href')
 							# text:
@@ -20,10 +20,10 @@ module.exports =
 							# 	'$sanitizer': ($elem) ->
 							# 		$elem.text()
 							posted_at:
-								'$rule': '.entry-meta time'
+								'$rule': '.date'
 								'$sanitizer': ($elem) ->
-									return $elem.attr('datetime')
-							image: '.post-thumb img'
+									$elem.text()
+							images: '.col-md-5 a img'
 							'$sanitizer': ($elem) ->
 								return $elem.attr('src')
 						next_link:
@@ -39,6 +39,6 @@ module.exports =
 			post: ->
 				return new Gurkha(
 					tags:
-						'$rule': '.tag-list a'
+						'$rule': 'a[rel="tag"]'
 				)
 	}

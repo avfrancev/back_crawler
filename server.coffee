@@ -1,3 +1,4 @@
+fs                                  = require 'fs'
 express                             = require 'express'
 cors                                = require 'cors'
 bodyParser                          = require 'body-parser'
@@ -11,7 +12,7 @@ jwt                                 = require("jwt-simple")
 { PubSub }                          = require 'graphql-subscriptions';
 
 pubsub = new PubSub()
-r = require('rethinkdbdash')({db: 'horizon'})
+r = require('rethinkdbdash')({db: 'horizon', timeout: 200})
 
 
 cfg = require './config.coffee'
@@ -51,15 +52,18 @@ typeDefs = """
 		name: String
 		full_name: String
 		active: Boolean
+		captureSelector: String
 		link: String
 		logo: String
 		loading: Boolean
 		depth: Int
 		concurrency: Int
 		parseInterval: Int
+		status: String
 		schemas: String
-		data: ItemData
 		postsCount: Int
+		nextParseDate: String
+		data: ItemData
 		posts(limit: Int): [Post]
 		owner: User
 	}
@@ -84,11 +88,23 @@ typeDefs = """
 		id: String!
 	}
 
+	type Stats {
+		start: String
+		stop: String
+		parsingTime: String
+		size: String
+	}
+
 	type Post {
 		id: String
 		title: String
 		link: String
+		images: [String]
+		status: String
+		parsed_at: String
 		itemId: String
+		stats: Stats
+		tags: [String]
 		item: Item
 		owner: User
 	}
@@ -97,8 +113,8 @@ typeDefs = """
 		items: [Item]
 		item(id: String): Item
 		users: [User]
-		posts(limit: Int): [Post]
 		post(id: String): Post
+		posts(limit: Int): [Post]
 	}
 
 	type Mutation {
@@ -107,6 +123,15 @@ typeDefs = """
 			id: String!
 			title: String
 			link: String
+			status: String
+		): Post
+
+		removePost(
+			id: String!
+		): Post
+
+		removePosts(
+			id: String!
 		): Post
 
 		updateItem(
@@ -116,14 +141,18 @@ typeDefs = """
 			full_name: String
 			depth: Int
 			concurrency: Int
+			schemas: String
 			parseInterval: Int
 			data: ItemDataInput
 			owner: String
 		): Item
+
 	}
 
 	type Subscription {
+		PostAdd: Post
 		PostChange: Post
+		PostRemove: Post
 		ItemChange: Item
 	}
 
@@ -165,37 +194,85 @@ resolvers =
 			# 	return
 
 		post: (_, {id}) -> r.table('Post').get(id).run()
-		posts: (_, {limit}) -> r.table('Post').limit(limit || 999).run()
+		posts: (_, {limit}) -> r.table('Post').orderBy(r.desc('parsed_at')).limit(limit || 999).run()
 	Mutation:
 		updatePost: (_, a) ->
 			updateModel('Post', a)
+		removePosts: (_, a) ->
+			r.table('Post').filter({ itemId: a.id }).delete().run().then ->
+				r.table('Item').get(a.id).then (item) ->
+					item.postsCount = 0
+					pubsub.publish("ItemChange", {"ItemChange": item})
+					return
+				return
+		removePost: (_, a) ->
+			r.table('Post').get(a.id).delete().run()
 		updateItem: (_, a) ->
-			updateModel('Item', a)
+			if a.schemas
+				fs.writeFile "./crawler/items/#{a.name}.coffee", a.schemas, (err) ->
+					if err then return console.log(err)
+					return
+			r.table('Item').get(a.id).then (_item) ->
+				r.table('Item').update(a, {returnChanges:true}).run().then (data, err) ->
+					if err then console.error err; return err
+					if data.changes.length > 0
+						if a.parseInterval and a.parseInterval != _item.parseInterval
+							_item.parseInterval = a.parseInterval
+							crawler.setJob _item
+							# console.log "parseInterval changed", a.parseInterval
+
+						return data.changes[0].new_val
+					else
+						return r.table("Item").get(a.id)
 
 
 	Subscription:
+		PostRemove:
+			subscribe: -> pubsub.asyncIterator('PostRemove')
+		PostAdd:
+			subscribe: -> pubsub.asyncIterator('PostAdd')
 		PostChange:
 			subscribe: -> pubsub.asyncIterator('PostChange')
 		ItemChange:
 			subscribe: -> pubsub.asyncIterator('ItemChange')
+			# resolve: (payload, args, context, info) ->
+			# 	console.log payload
+			# 	payload
 
 
 updateModel = (model, payload) ->
+	# console.log payload
 	r.table(model).update(payload, {returnChanges:true}).run().then (data, err) ->
-		# console.log data
 		if err then console.error err; return err
 		if data.changes.length > 0
-			pubsub.publish("#{model}Change", {"#{model}Change": data.changes[0].new_val})
-			data.changes[0].new_val
+			# pubsub.publish("#{model}Change", {"#{model}Change": data.changes[0].new_val})
+			if model is 'Item' and payload.parseInterval
+				console.log "parseInterval changed", payload.parseInterval
+			# console.log "asdasdasdasd"
+			return data.changes[0].new_val
 		else
 			return r.table("#{model}").get(payload.id)
 
 
-r.table('Item').changes({includeTypes: true}).run().then (cursor) ->
+r.table('Item').changes({includeTypes: true}).run().then (c) -> publishChanges('Item', c)
+r.table('Post').changes({includeTypes: true}).run().then (c) -> publishChanges('Post', c)
+
+publishChanges = (model, cursor) ->
 	cursor.each (err, x) ->
 		switch x.type
 			when 'change'
-				pubsub.publish("ItemChange", {"ItemChange": x.new_val})
+				pubsub.publish("#{model}Change", {"#{model}Change": x.new_val})
+			when 'add'
+				pubsub.publish("#{model}Add", {"#{model}Add": x.new_val})
+			when 'remove'
+				pubsub.publish("#{model}Remove", {"#{model}Remove": x.old_val})
+				# if model is 'Post'
+				# 	console.log "DELETE POST: ", x
+				# 	pubsub.publish("PostRemove", {"PostRemove": x.old_val.id})
+
+
+
+
 
 
 schema = makeExecutableSchema(
@@ -220,12 +297,27 @@ app.get '/', (req, res) ->
 	return
 
 
+
+
+app.get '/parse', auth.authenticate(),  (req, res) ->
+	crawler.emitter.emit 'parse', req.query.id
+	res.json parse: req.query.id
+	return
+
+app.get '/api/remove_item_posts', auth.authenticate(),  (req, res) ->
+	# console.log req.query.id
+	if req.query.id
+		r.table('Post').filter({itemId: req.query.id}).delete().then (x) ->
+
+	res.json parse: req.query.id
+	return
+
+
 app.get '/auth/user', auth.authenticate(), (req, res) ->
 	delete req.user.hash
 	res.status(200).json
 		status: 'success'
 		data: req.user
-
 	return
 
 app.post '/auth/login', (req, res) ->
@@ -235,7 +327,6 @@ app.post '/auth/login', (req, res) ->
 			username: req.body.username
 		).pluck('id', 'hash').then (user) ->
 			# hash = bcrypt.hashSync('admin', 11)
-			console.log bcrypt.compareSync req.body.password, user[0].hash
 			if user[0] and bcrypt.compareSync req.body.password, user[0].hash
 				payload = id: user[0].id
 				token = jwt.encode(payload, cfg.jwtSecret)

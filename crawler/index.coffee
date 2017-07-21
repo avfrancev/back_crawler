@@ -49,17 +49,37 @@ __parsePost = (post, item, schemas) ->
 						# console.log __savePost
 						post = Object.assign {}, x, schemas.post().parse(x.body)[0]
 						delete post.body
+						if typeof post.images is 'string'
+							post.images = [post.images]
+						post.tags = post.tags || []
+						if typeof post.tags is 'string'
+							post.tags = [post.tags]
 						post.itemId = item.id
 						post.owner = item.owner
-						post.parsed_at = new Date()
+						post.status = 'pending'
+						# post.timestamp = new Date().getTime().valueOf()
+						post.parsed_at = new Date().getTime()
+						# post.
 						# post.item =
 						# 	name: item.name
 						# 	full_name: item.full_name
 						# 	logo: item.logo
 						post
+						# Rx.Observable.fromPromise __savePost post
 					)
-					# .flatMap((post) -> __savePost post)
-					# .map((x)->x)
+					.concatMap((post) -> __savePost post)
+					.map((x) ->
+						post = x.changes[0].new_val
+						console.log "[+] #{post.title}", post
+						post
+					)
+					# .concatAll()
+					# .do(console.log)
+					# .concatMap((post) ->
+					# 	console.log post
+					# 	__savePost post
+					# )
+					# .do(console.log)
 					# .do(console.log )
 			else
 				# console.table x.post
@@ -71,13 +91,15 @@ __parsePost = (post, item, schemas) ->
 		# .do(console.log )
 
 __savePost = (post) ->
-	console.log "[+] #{post.title}", post
-	r.table('Post').insert(post).run()
+	r.table('Post').insert(post, {returnChanges: true}).run()
 
 
 __parsePage = (item, link, schemas) ->
 	Rx.Observable.fromPromise(getBody(link))
-		.map((x) -> schemas.page().parse(x.body)[0])
+		.map((x) ->
+			# console.log schemas.page().parse(x.body)
+			schemas.page().parse(x.body)[0]
+		)
 		.do((x) -> console.log "-------- PAGE #{item.data.depth} --------" )
 		.concatMap(
 			( (x) ->
@@ -91,13 +113,16 @@ __parsePage = (item, link, schemas) ->
 
 				Rx.Observable.from(x.posts)
 					.mergeMap(((post) -> __parsePost post, item, schemas), +item.concurrency)
+					# .do(console.log)
 					.flatMap((x) ->
 						unless x.id
 							# log = item.logs[item.logs.length-1]
 							# log.newPosts.push x
 							# console.log log
 							# updateItemLog(item.id, log)
-							__savePost(x)
+							console.log "SAVING/////"
+							# __savePost(item, x)
+							Rx.Observable.of(x)
 						else Rx.Observable.of(x)
 					)
 					.do( (xx) ->
@@ -127,50 +152,56 @@ __parsePage = (item, link, schemas) ->
 
 __parseItem = (id) ->
 	if !id then console.error 'Specify the ID !'; return
-	r.table('Item').get(id).then (item) ->
-		console.warn "START #{item.full_name}"
+	new Promise (resolve) ->
+		r.table('Log').insert({start: new Date().getTime()}, {returnChanges: true}).then (log) ->
+			r.table('Item').get(id).then (item) ->
+				console.warn "START #{item.full_name}"
 
-		item.data.depth = 1
-		schemas = require "./items/#{item.name}.coffee"
+				item.data.depth = 1
+				schemas = require "./items/#{item.name}.coffee"
 
-		# logs = item.logs || []
+				item.log =
+					startParse: new Date().getTime()
+					itemId: item.id
+					concurrency: item.concurrency
+					depth: item.depth
+					posts: []
 
-		# logs.push
-		# 	startParse: new Date()
-		# 	concurrency: item.concurrency
-		# 	newPosts: []
-
-		DB.updateModel 'Item',
-			id: item.id
-			loading: true
-			# logs: logs
-			data:
-				depth: item.data.depth
-				parsedPagePostsCount: 0
-
-
-		__parsePage(item, item.link, schemas)
-		.subscribe(
-
-			complete: ->
-
-				logs =
-					stopParse: new Date()
-				# updateItemLog(item.id, logs)
-
-				# nextParseDate = jobs.addMinutes new Date(), +item.parseInterval * 60 || config.parseInterval
 
 				DB.updateModel 'Item',
 					id: item.id
-					loading: false
-					lastParseDate: new Date()
-					# nextParseDate: nextParseDate
+					loading: true
+					status: 'parsing'
+					data:
+						depth: item.data.depth
+						parsedPagePostsCount: 0
 
-				console.warn "COMPLETE #{item.full_name}"
+
+				__parsePage(item, item.link, schemas)
+					.subscribe(
+
+						complete: ->
+
+							item.log.stopParse = new Date().getTime()
+							item.log.parsingTime = item.log.stopParse - item.log.startParse
+							# updateItemLog(item.id, logs)
+							console.log item.log
+							setJob item
+							# nextParseDate = jobs.addMinutes new Date().getTime(), +item.parseInterval * 60 || config.parseInterval
+
+							DB.updateModel 'Item',
+								id: item.id
+								loading: false
+								status: ''
+								lastParseDate: new Date().getTime()
+
+							console.warn "COMPLETE #{item.full_name}"
+							resolve(item)
+							return
+					)
 				return
-		)
+			return
 		return
-	return
 
 
 getBody = (url, post) ->
@@ -178,7 +209,7 @@ getBody = (url, post) ->
 	result =
 		body: ''
 		stats:
-			start: new Date()
+			start: new Date().getTime()
 
 	if post
 		result = Object.assign result, post
@@ -202,13 +233,17 @@ getBody = (url, post) ->
 		# 	return
 
 		stream.on 'err', (err) ->
-			# console.log 'ERROR'
-			# console.error err
-			reject err
+			console.log 'ERROR'
+			console.error err
+			# reject err
+			setTimeout ->
+				console.log '.................'
+				getBody url, post
+			, 5000
 			return
 
 		stream.on 'end', (err) =>
-			result.stats.stop = new Date()
+			result.stats.stop = new Date().getTime()
 			result.stats.parsingTime = result.stats.stop - result.stats.start
 			result.stats.size = result.body.length
 			resolve result
@@ -218,6 +253,46 @@ getBody = (url, post) ->
 
 # ============== TEST ==============
 
+items = []
+
+setJob = (item, startParseDate) ->
+	if item.active
+		clearInterval items[item.id] if items[item.id]
+		nextParseDate = startParseDate || new Date().getTime() + item.parseInterval * 60 * 60 * 1000
+		interval = (new Date nextParseDate) - new Date().getTime()
+		console.log "Set job #{item.name}: ", new Date nextParseDate
+		items[item.id] = setInterval ->
+			# console.log item.parseInterval
+			emitter.emit 'parse', item.id
+			# setJob item
+		, interval
+	else
+		nextParseDate = null
+	DB.updateModel 'Item',
+		id:             item.id
+		nextParseDate:  nextParseDate
+
+
+
+
+EventEmitter = require('events').EventEmitter
+emitter = new EventEmitter()
+
+Rx.Observable.fromEvent(emitter, 'parse')
+	.filter((x) -> x.length > 0)
+	.map( (x) ->
+		DB.updateModel 'Item',
+			id: x
+			status: 'queued'
+			data: progress: 0
+		console.log x
+		x
+	)
+	.concatMap((x) ->
+		__parseItem(x)
+	)
+	.subscribe()
+
 
 
 module.exports = (config) ->
@@ -226,11 +301,15 @@ module.exports = (config) ->
 
 	r = require('rethinkdbdash')({db: config.DBName})
 	DB = require('./DB.coffee')(config)
-	jobs = require('./jobs.coffee')(config)
+	# jobs = require('./jobs.coffee')(config)
 
-	module.parseItem = __parseItem
-		# __parseItem()
-		# console.log "YYYYY )))"
+	r.table('Item').then (_items) ->
+		_items.map (item) ->
+			nextParseDate = item.nextParseDate if item.nextParseDate > new Date().getTime()
+			setJob item, nextParseDate
+			return
 
+	module.emitter = emitter
+	module.setJob = setJob
 
 	module
