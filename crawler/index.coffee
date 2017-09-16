@@ -42,8 +42,12 @@ __parsePost = (post, item, schemas) ->
 		.flatMap((x) ->
 			if x.isNewPost
 				# console.log "[+] #{x.post.title}"
-				return Rx.Observable
+				Rx.Observable
 					.fromPromise(getBody(x.post.link, x.post))
+					.retryWhen( (errors) ->
+						console.log error
+						return errors.delay(2200)
+					)
 					.map((x) ->
 						# console.log __savePost { itemId:  }
 						# console.log __savePost
@@ -83,8 +87,8 @@ __parsePost = (post, item, schemas) ->
 					# .do(console.log )
 			else
 				# console.table x.post
-				console.log "[-] #{x.post.title}"
-				return Rx.Observable.of(x.post).delay(250)
+				# console.log "[-] #{x.post.title}"
+				return Rx.Observable.of(x.post).delay(2)
 		)
 		# .merge(3)
 		# .delay(500)
@@ -96,6 +100,10 @@ __savePost = (post) ->
 
 __parsePage = (item, link, schemas) ->
 	Rx.Observable.fromPromise(getBody(link))
+		.retryWhen( (errors) ->
+			console.log error
+			return errors.delay(2200)
+		)
 		.map((x) ->
 			# console.log schemas.page().parse(x.body)
 			schemas.page().parse(x.body)[0]
@@ -197,6 +205,7 @@ __parseItem = (id) ->
 
 							console.warn "COMPLETE #{item.full_name}"
 							resolve(item)
+							# emitter.emit 'parse', item.id
 							return
 					)
 				return
@@ -235,11 +244,11 @@ getBody = (url, post) ->
 		stream.on 'err', (err) ->
 			console.log 'ERROR'
 			console.error err
-			# reject err
-			setTimeout ->
-				console.log '.................'
-				getBody url, post
-			, 5000
+			reject err
+			# setTimeout ->
+			# 	console.log '.................'
+			# 	getBody url, post
+			# , 5000
 			return
 
 		stream.on 'end', (err) =>
