@@ -18,14 +18,14 @@ r = require('rethinkdbdash')({db: 'horizon', timeout: 200})
 cfg = require './config.coffee'
 
 
-crawler = require('./crawler/index.coffee')(cfg)
+# crawler = require('./crawler/index.coffee')(cfg)
 
-
+{ addItemToQueue, setJob } = require './NEWTEST'
 
 
 
 # setTimeout ->
-# 	crawler.parseItem('a8f18010-45a6-4e3d-bee6-df8da404806b')
+# 	crawler.addItemToQueue('a8f18010-45a6-4e3d-bee6-df8da404806b')
 # , 3000
 
 app = express()
@@ -218,7 +218,7 @@ resolvers =
 					if data.changes.length > 0
 						if a.parseInterval and a.parseInterval != _item.parseInterval
 							_item.parseInterval = a.parseInterval
-							crawler.setJob _item
+							setJob _item
 							# console.log "parseInterval changed", a.parseInterval
 
 						return data.changes[0].new_val
@@ -296,11 +296,10 @@ app.get '/', (req, res) ->
 	res.json status: 'My API is alive!'
 	return
 
-
-
-
 app.get '/parse', auth.authenticate(),  (req, res) ->
-	crawler.emitter.emit 'parse', req.query.id
+	# crawler.emitter.emit 'parse', req.query.id
+	addItemToQueue req.query.id
+	# console.log req.query.id
 	res.json parse: req.query.id
 	return
 
@@ -320,6 +319,7 @@ app.get '/auth/user', auth.authenticate(), (req, res) ->
 		data: req.user
 	return
 
+console.log bcrypt.hashSync('admin', 11)
 app.post '/auth/login', (req, res) ->
 	if req.body.username and req.body.password
 		r.table('users').filter(
@@ -328,6 +328,7 @@ app.post '/auth/login', (req, res) ->
 		).pluck('id', 'hash').then (user) ->
 			# hash = bcrypt.hashSync('admin', 11)
 			if user[0] and bcrypt.compareSync req.body.password, user[0].hash
+				console.log user[0]
 				payload = id: user[0].id
 				token = jwt.encode(payload, cfg.jwtSecret)
 				user[0].token = token

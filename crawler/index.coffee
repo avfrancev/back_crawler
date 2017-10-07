@@ -100,12 +100,12 @@ __savePost = (post) ->
 
 __parsePage = (item, link, schemas) ->
 	Rx.Observable.fromPromise(getBody(link))
-		.retryWhen( (errors) ->
-			console.log error
-			return errors.delay(2200)
-		)
+		# .retryWhen( (errors) ->
+		# 	console.log errors
+		# 	return errors.delay(2200)
+		# )
 		.map((x) ->
-			# console.log schemas.page().parse(x.body)
+			console.log schemas.page().parse(x.body)
 			schemas.page().parse(x.body)[0]
 		)
 		.do((x) -> console.log "-------- PAGE #{item.data.depth} --------" )
@@ -161,6 +161,7 @@ __parsePage = (item, link, schemas) ->
 __parseItem = (id) ->
 	if !id then console.error 'Specify the ID !'; return
 	new Promise (resolve) ->
+		console.log 'OARSING>>>>>>'
 		r.table('Log').insert({start: new Date().getTime()}, {returnChanges: true}).then (log) ->
 			r.table('Item').get(id).then (item) ->
 				console.warn "START #{item.full_name}"
@@ -312,11 +313,11 @@ module.exports = (config) ->
 	DB = require('./DB.coffee')(config)
 	# jobs = require('./jobs.coffee')(config)
 
-	r.table('Item').then (_items) ->
-		_items.map (item) ->
-			nextParseDate = item.nextParseDate if item.nextParseDate > new Date().getTime()
-			setJob item, nextParseDate
-			return
+	# r.table('Item').then (_items) ->
+	# 	_items.map (item) ->
+	# 		nextParseDate = item.nextParseDate if item.nextParseDate > new Date().getTime()
+	# 		setJob item, nextParseDate
+	# 		return
 
 	module.emitter = emitter
 	module.setJob = setJob
