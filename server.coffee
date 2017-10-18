@@ -12,7 +12,7 @@ jwt                                 = require("jwt-simple")
 { PubSub }                          = require 'graphql-subscriptions';
 
 pubsub = new PubSub()
-r = require('rethinkdbdash')({db: 'horizon', timeout: 200})
+r      = require('rethinkdbdash')({db: 'horizon', timeout: 200})
 
 
 cfg = require './config.coffee'

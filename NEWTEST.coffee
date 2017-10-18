@@ -1,12 +1,24 @@
 needle = require('needle')
 moment = require 'moment'
+cheerio = require 'cheerio'
 config = require './config'
+log = require('cllc')(module)
+
+async = require 'async'
 
 DB = require('./crawler/DB')(config)
+r = require('rethinkdbdash')({db: 'horizon'})
+
+needle.defaults
+	open_timeout: 3000
+	compressed:   true
+	parse_response: true
 
 
-getBody = (url, post) ->
 
+errorCount = 0
+
+getBody = (url, post, l) ->
 	result =
 		body: ''
 		stats:
@@ -15,56 +27,27 @@ getBody = (url, post) ->
 	if post
 		result = Object.assign result, post
 
-	new Promise (resolve, reject) =>
-		options =
-			open_timeout: 5000
-			read_timeout: 5000
-			compressed:   true
-
-		reject 'Specify URL !!!'	if url.length < 1
-		# if url is
-		# console.log typeOf url
-
-		stream = needle.get url, options
-
-		stream.on 'readable', ->
-			while chunk = @read()
-				result.body += chunk
-			return
-
-		# stream.on 'timeout', (err) ->
-		# 	console.log "timeout"
-		# 	console.error err
-		# 	return
-
-		stream.on 'err', (err) ->
-			console.log 'ERROR'
-			console.error err
-			reject err
-			# setTimeout ->
-			# 	console.log '.................'
-			# 	getBody url, post
-			# , 5000
-			return
-
-		stream.on 'end', (err) =>
-			result.stats.stop = new Date().getTime()
-			result.stats.parsingTime = result.stats.stop - result.stats.start
-			result.stats.size = result.body.length
-			resolve result
-			return
-
-		return
+	needle('get', url)
+	.then (res) ->
+		errorCount = 0
+		result.body = res.body
+		result.stats.stop = new Date().getTime()
+		result.stats.parsingTime = result.stats.stop - result.stats.start
+		result.stats.size = result.body.length
+		return result
+	.catch (err) ->
+		if ++errorCount > 5
+			return Promise.reject(err)
+		# if post
+		# 	l.error "Repeat post :: #{post.title}"
+		# else
+		l.error err
+		await sleep 1200
+		return getBody url, post, l
 
 sleep = (ms) ->
 	new Promise (resolve) ->
 		setTimeout resolve, ms
-
-logdown = require 'logdown'
-l = logdown('#')
-
-async = require 'async'
-r = require('rethinkdbdash')({db: 'horizon'})
 
 checkIfPostExist = (post) ->
 	new Promise (resolve, reject) ->
@@ -77,23 +60,63 @@ checkIfPostExist = (post) ->
 			return
 		return
 
+contentAnalize = (content) ->
+	unless content and content.length > 0
+		return []
+
+	corpus = {}
+	words = []
+	content.split(' ').forEach (word) ->
+		unless 4 < word.length < 20
+			return
+		if corpus[word]
+			corpus[word]++
+		else
+			corpus[word] = 1
+		return
+
+	for prop of corpus
+		if corpus[prop] > 2
+			words.push
+				word: prop
+				count: corpus[prop]
+
+	words.sort (a, b) ->
+		b.count - (a.count)
+
+	return words.slice(0,5)
+
 parsePosts = (item, posts, schema, l) ->
 	parsedPagePostsCount = 0
 	new Promise (resolve, reject) ->
 		for post in posts
 			p = await checkIfPostExist post
-
-
-
+			++parsedPagePostsCount
+			progress = Math.floor (100 / (item.depth)) * (item.data.depth - 1) + ((parsedPagePostsCount * (100 / item.depth)) / item.data.PagePostsCount)
+			# console.log post.link
+			await sleep 300
+			# ll parsedPagePostsCount
+			l.step(1)
+			# log item.depth*item.data.PagePostsCount
 			if !p.isNewPost
-				l.log "[ - ] #{post.title}"
+				# l.log "#{parsedPagePostsCount} [ - ] #{post.title}"
 			else
-				l.log "[ + ] #{post.title}"
-				b = await getBody post.link, post
+				# ll "#{parsedPagePostsCount} [ + ] #{post.title}"
+				try
+					b = await getBody post.link, post, l
+				catch err
+					console.log '124197254019827598178127498'
+					reject(err)
+					return
+
+				l "[ + ] #{post.title}"
 				parsed_body = schema.post().parse(b.body)[0]
+				keywords = contentAnalize parsed_body.content
+				# console.log post
 				delete b.body
-				# console.log parsed_body
-				post = { post..., parsed_body..., b... }
+				delete b.content
+				post = { post..., parsed_body..., b..., keywords }
+				# console.log post
 				if typeof post.images is 'string'
 					post.images = [post.images]
 				post.tags = post.tags || []
@@ -105,8 +128,6 @@ parsePosts = (item, posts, schema, l) ->
 
 				r.table('Post').insert(post, {returnChanges: true}).run()
 
-			++parsedPagePostsCount
-			progress = Math.floor (100 / (item.depth)) * (item.data.depth - 1) + ((parsedPagePostsCount * (100 / item.depth)) / item.data.PagePostsCount)
 			DB.updateModel 'Item',
 				id: item.id
 				data:
@@ -123,14 +144,21 @@ parsePage = ({ item, l }, done) ->
 	# Loop pages
 	if item.data.depth++ < item.depth
 		try
-			{body} = await getBody(item.link)
+			{body} = await getBody(item.link, null, l)
 		catch err
-			l.error err
+			# console.log err
+			# l.stop()
+			done(err, {item, l})
+			return
 
 		parsed_body = schema.page().parse(body)[0]
-		l.log "=== PAGE ##{item.data.depth} ==="
+		# l.log "=== PAGE ##{item.data.depth} ==="
 
-		await parsePosts item, parsed_body.posts, schema, l
+		try
+			await parsePosts item, parsed_body.posts, schema, l
+		catch err
+			done(err, {item,l})
+			return
 
 		item.link = parsed_body.next_link
 		parsePage {item, l}, _done
@@ -138,18 +166,14 @@ parsePage = ({ item, l }, done) ->
 
 	# End parsing
 	else
-		await sleep 1000
-		l.log '=== FINISH ==='
-		DB.updateModel 'Item',
-			id: item.id
-			loading: false
-			status: ''
-			lastParseDate: new Date().getTime()
-		setJob item
-		done()
+		done(null, {item, l})
 	return
 
-parseItem = ({ item, l }, done) ->
+parseItem = ( item, done) ->
+	l = require('cllc')(item.name)
+	l "START"
+	l.start("#{item.name} :: [%s \\ #{item.depth*item.data.PagePostsCount}]")
+
 	DB.updateModel 'Item',
 		id: item.id
 		loading: true
@@ -157,6 +181,7 @@ parseItem = ({ item, l }, done) ->
 		data:
 			depth: 0
 			parsedPagePostsCount: 0
+
 	parsePage { item, l }, done
 	return
 
@@ -164,23 +189,45 @@ q = async.queue(parseItem, 1)
 
 addItemToQueue = (id) ->
 	r.table('Item').get(id).then (item) ->
-		l = logdown("#::#{item.name}")
+
 		DB.updateModel 'Item',
 			id: item.id
 			status: 'queued'
 			data: progress: 0
-		q.push {item, l}
+
+		q.push item, (err, data) ->
+			{item,l} = data
+			if err
+				status = 'error'
+				console.error 'ERROR :: ', err
+			else
+				status = ''
+				console.log item.name
+
+			DB.updateModel 'Item',
+				id: item.id
+				loading: false
+				status: status
+				lastParseDate: new Date().getTime()
+
+			l.stop()
+			# l 'FINISH'
+			setJob item
+
 		return
 	return
 
+# addItemToQueue '7e816d12-dfec-4b71-9e7b-1e78807085db'
 items = []
 
 setJob = (item, startParseDate) ->
+	l = require('cllc')(item.name)
 	if item.active
 		clearInterval items[item.id] if items[item.id]
 		nextParseDate = startParseDate || new Date().getTime() + item.parseInterval * 60 * 60 * 1000
 		interval = (new Date nextParseDate) - new Date().getTime()
-		console.log "Set job #{item.name}: ", moment(nextParseDate).format("HH:mm:ss")
+		l "Next job at: #{moment(nextParseDate).format("HH:mm:ss")}"
+		# console.log "Set job #{item.name}: ", moment(nextParseDate).format("HH:mm:ss")
 		items[item.id] = setInterval ->
 			# console.log item.parseInterval
 			addItemToQueue item.id

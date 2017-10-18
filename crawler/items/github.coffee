@@ -32,6 +32,8 @@ module.exports =
 			)
 		post: ->
 			return new Gurkha(
+				content:
+					'$rule': '.blog-content'
 				images:
 					'$rule': '.blog-post-body img'
 					'$sanitizer': ($elem) ->
