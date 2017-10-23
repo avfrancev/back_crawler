@@ -10,7 +10,7 @@ DB = require('./crawler/DB')(config)
 r = require('rethinkdbdash')({db: 'horizon'})
 
 needle.defaults
-	open_timeout: 3000
+	open_timeout: 1500
 	compressed:   true
 	parse_response: true
 
@@ -94,7 +94,7 @@ parsePosts = (item, posts, schema, l) ->
 			++parsedPagePostsCount
 			progress = Math.floor (100 / (item.depth)) * (item.data.depth - 1) + ((parsedPagePostsCount * (100 / item.depth)) / item.data.PagePostsCount)
 			# console.log post.link
-			await sleep 300
+			await sleep 100
 			# ll parsedPagePostsCount
 			l.step(1)
 			# log item.depth*item.data.PagePostsCount
@@ -115,7 +115,12 @@ parsePosts = (item, posts, schema, l) ->
 				# console.log post
 				delete b.body
 				delete b.content
-				post = { post..., parsed_body..., b..., keywords }
+				post = {
+					post...
+					parsed_body...
+					b...
+					keywords
+				}
 				# console.log post
 				if typeof post.images is 'string'
 					post.images = [post.images]
@@ -201,7 +206,7 @@ addItemToQueue = (id) ->
 				status = 'error'
 				console.error 'ERROR :: ', err
 			else
-				status = ''
+				status = 'success'
 				console.log item.name
 
 			DB.updateModel 'Item',

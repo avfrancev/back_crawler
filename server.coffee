@@ -10,6 +10,8 @@ jwt                                 = require("jwt-simple")
 { makeExecutableSchema }            = require 'graphql-tools'
 { SubscriptionServer }              = require 'subscriptions-transport-ws'
 { PubSub }                          = require 'graphql-subscriptions';
+https = require('https')
+http = require('http')
 
 pubsub = new PubSub()
 r      = require('rethinkdbdash')({db: 'horizon', timeout: 200})
@@ -128,6 +130,7 @@ typeDefs = """
 
 		removePost(
 			id: String!
+			itemId: String
 		): Post
 
 		removePosts(
@@ -195,6 +198,7 @@ resolvers =
 
 		post: (_, {id}) -> r.table('Post').get(id).run()
 		posts: (_, {limit}) -> r.table('Post').orderBy(r.desc('parsed_at')).limit(limit || 999).run()
+
 	Mutation:
 		updatePost: (_, a) ->
 			updateModel('Post', a)
@@ -202,11 +206,16 @@ resolvers =
 			r.table('Post').filter({ itemId: a.id }).delete().run().then ->
 				r.table('Item').get(a.id).then (item) ->
 					item.postsCount = 0
-					pubsub.publish("ItemChange", {"ItemChange": item})
+					pubsub.publish("ItemChange", {"ItemChange": {id: item.id, postsCount: item.postsCount}})
 					return
 				return
 		removePost: (_, a) ->
-			r.table('Post').get(a.id).delete().run()
+			await r.table('Post').get(a.id).delete().run()
+			postsCount = await r.table('Post').filter({itemId:a.itemId}).count().run()
+			updateModel 'Item',
+				id: a.itemId
+				postsCount: postsCount
+			return
 		updateItem: (_, a) ->
 			if a.schemas
 				fs.writeFile "./crawler/items/#{a.name}.coffee", a.schemas, (err) ->
@@ -343,11 +352,30 @@ app.post '/auth/login', (req, res) ->
 		res.sendStatus 401
 	return
 
+options =
+	key: fs.readFileSync('./avfrancev.ddns.net/privkey.pem').toString()
+	cert: fs.readFileSync('./avfrancev.ddns.net/cert.pem').toString()
+	# ciphers: 'ECDHE-RSA-AES256-GCM-SHA384:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-SHA:ECDHE-RSA-AES128-SHA256:ECDHE-RSA-AES256-SHA:ECDHE-RSA-AES256-SHA384'
+	# honorCipherOrder: true
+	# secureProtocol: 'TLSv1_2_method'
 
 
-server = createServer(app)
-
+# httpServer = http.createServer(app).listen(cfg.PORT)
+httpsServer = https.createServer(options, app).listen(cfg.PORT + 1)
+# server = createServer(app)
 # new SubscriptionServer({ subscriptionManager: subscriptionManager },
+# new SubscriptionServer(
+# 	{
+# 		execute,
+# 		subscribe,
+# 		schema,
+# 	},
+# 	{
+# 		path: cfg.SUBSCRIPTIONS_PATH
+# 		server: httpServer
+# 	}
+# )
+
 new SubscriptionServer(
 	{
 		execute,
@@ -356,10 +384,10 @@ new SubscriptionServer(
 	},
 	{
 		path: cfg.SUBSCRIPTIONS_PATH
-		server: server
+		server: httpsServer
 	}
 )
 
-server.listen cfg.PORT, ->
-	console.log "API Server is now running on http://localhost:#{cfg.PORT}/graphql"
-	console.log "API Subscriptions server is now running on ws://localhost:#{cfg.PORT}#{cfg.SUBSCRIPTIONS_PATH}"
+# server.listen cfg.PORT, ->
+# 	console.log "API Server is now running on http://localhost:#{cfg.PORT}/graphql"
+# 	console.log "API Subscriptions server is now running on ws://localhost:#{cfg.PORT}#{cfg.SUBSCRIPTIONS_PATH}"
