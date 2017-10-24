@@ -391,5 +391,3 @@ new SubscriptionServer(
 # server.listen cfg.PORT, ->
 # 	console.log "API Server is now running on http://localhost:#{cfg.PORT}/graphql"
 # 	console.log "API Subscriptions server is now running on ws://localhost:#{cfg.PORT}#{cfg.SUBSCRIPTIONS_PATH}"
-
-# HELLO (local)
