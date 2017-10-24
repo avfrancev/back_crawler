@@ -353,8 +353,8 @@ app.post '/auth/login', (req, res) ->
 	return
 
 options =
-	key: fs.readFileSync('./avfrancev.ddns.net/privkey.pem').toString()
-	cert: fs.readFileSync('./avfrancev.ddns.net/cert.pem').toString()
+	key: fs.readFileSync('/etc/letsencrypt/live/avfrancev.ddns.net/privkey.pem').toString()
+	cert: fs.readFileSync('/etc/letsencrypt/live/avfrancev.ddns.net/cert.pem').toString()
 	ciphers: 'ECDHE-RSA-AES256-GCM-SHA384:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-SHA:ECDHE-RSA-AES128-SHA256:ECDHE-RSA-AES256-SHA:ECDHE-RSA-AES256-SHA384'
 	honorCipherOrder: true
 	secureProtocol: 'TLSv1_2_method'
