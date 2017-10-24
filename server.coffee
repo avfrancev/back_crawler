@@ -352,29 +352,20 @@ app.post '/auth/login', (req, res) ->
 		res.sendStatus 401
 	return
 
-options =
-	key: fs.readFileSync('/etc/letsencrypt/live/avfrancev.ddns.net/privkey.pem').toString()
-	cert: fs.readFileSync('/etc/letsencrypt/live/avfrancev.ddns.net/cert.pem').toString()
-	ciphers: 'ECDHE-RSA-AES256-GCM-SHA384:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-SHA:ECDHE-RSA-AES128-SHA256:ECDHE-RSA-AES256-SHA:ECDHE-RSA-AES256-SHA384'
-	honorCipherOrder: true
-	secureProtocol: 'TLSv1_2_method'
+if process.env.NODE_ENV is 'prod'
 
+	options =
+		key: fs.readFileSync(cfg[process.env.NODE_ENV].key).toString()
+		cert: fs.readFileSync(cfg[process.env.NODE_ENV].cert).toString()
+		ciphers: 'ECDHE-RSA-AES256-GCM-SHA384:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-SHA:ECDHE-RSA-AES128-SHA256:ECDHE-RSA-AES256-SHA:ECDHE-RSA-AES256-SHA384'
+		honorCipherOrder: true
+		secureProtocol: 'TLSv1_2_method'
 
-# httpServer = http.createServer(app).listen(cfg.PORT)
-httpsServer = https.createServer(options, app).listen(cfg.PORT + 1)
-# server = createServer(app)
-# new SubscriptionServer({ subscriptionManager: subscriptionManager },
-# new SubscriptionServer(
-# 	{
-# 		execute,
-# 		subscribe,
-# 		schema,
-# 	},
-# 	{
-# 		path: cfg.SUBSCRIPTIONS_PATH
-# 		server: httpServer
-# 	}
-# )
+	httpServer = https.createServer(options, app).listen(cfg.PORT + 1)
+
+else
+	httpServer = http.createServer(app).listen(cfg.PORT)
+
 
 new SubscriptionServer(
 	{
@@ -384,7 +375,7 @@ new SubscriptionServer(
 	},
 	{
 		path: cfg.SUBSCRIPTIONS_PATH
-		server: httpsServer
+		server: httpServer
 	}
 )
 
