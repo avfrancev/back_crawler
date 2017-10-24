@@ -11,6 +11,7 @@
     "bcrypt": "^1.0.2",
     "bee-queue": "^1.1.0",
     "body-parser": "^1.17.2",
+    "cllc": "0.0.10",
     "cors": "^2.8.3",
     "express": "^4.15.3",
     "express-graphql": "^0.6.6",
