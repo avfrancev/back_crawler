@@ -92,15 +92,16 @@ parsePosts = (item, posts, schema, l) ->
 		for post in posts
 			p = await checkIfPostExist post
 			++parsedPagePostsCount
-			progress = Math.floor (100 / (item.depth)) * (item.data.depth - 1) + ((parsedPagePostsCount * (100 / item.depth)) / item.data.PagePostsCount)
+			# progress = Math.floor (100 / (item.depth)) * (item.data.depth - 1) + ((parsedPagePostsCount * (100 / item.depth)) / item.data.PagePostsCount)
+			progress = Math.floor (100 / (item.depth)) * (item.data.depth) + ((parsedPagePostsCount * (100 / (item.depth))) / item.data.PagePostsCount)
 			# console.log post.link
 			await sleep 100
 			# ll parsedPagePostsCount
 			l.step(1)
 			# log item.depth*item.data.PagePostsCount
-			if !p.isNewPost
-				# l.log "#{parsedPagePostsCount} [ - ] #{post.title}"
-			else
+			if p.isNewPost
+				# l.warn "#{parsedPagePostsCount} [ - ] #{post.title}"
+				# else
 				# ll "#{parsedPagePostsCount} [ + ] #{post.title}"
 				try
 					b = await getBody post.link, post, l
@@ -147,29 +148,28 @@ parsePage = ({ item, l }, done) ->
 	schema = require "./crawler/items/#{item.name}.coffee"
 
 	# Loop pages
-	if item.data.depth++ < item.depth
-		try
-			{body} = await getBody(item.link, null, l)
-		catch err
-			# console.log err
-			# l.stop()
-			done(err, {item, l})
-			return
-
-		parsed_body = schema.page().parse(body)[0]
-		# l.log "=== PAGE ##{item.data.depth} ==="
-
-		try
-			await parsePosts item, parsed_body.posts, schema, l
-		catch err
-			done(err, {item,l})
-			return
-
-		item.link = parsed_body.next_link
-		parsePage {item, l}, _done
+	try
+		# console.dir item
+		# console.log '==================='
+		{body} = await getBody(item.link, null, l)
+	catch err
+		# console.log err
+		# l.stop()
+		done(err, {item, l})
 		return
 
-	# End parsing
+	parsed_body = schema.page().parse(body)[0]
+	# l.log "=== PAGE ##{item.data.depth} ==="
+
+	try
+		await parsePosts item, parsed_body.posts, schema, l
+	catch err
+		done(err, {item,l})
+		return
+
+	if ++item.data.depth < item.depth && typeof parsed_body.next_link is 'string'
+		item.link = parsed_body.next_link
+		parsePage {item, l}, _done
 	else
 		done(null, {item, l})
 	return

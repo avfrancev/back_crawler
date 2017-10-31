@@ -97,6 +97,14 @@ typeDefs = """
 		size: String
 	}
 
+	input PostsFilter {
+		status: String
+		itemId: String
+		itemIds: [String]
+		published: String
+		searchQuery: String
+	}
+
 	type Post {
 		id: String
 		title: String
@@ -104,6 +112,7 @@ typeDefs = """
 		images: [String]
 		status: String
 		parsed_at: String
+		published: Boolean
 		itemId: String
 		stats: Stats
 		tags: [String]
@@ -114,9 +123,9 @@ typeDefs = """
 	type Query {
 		items: [Item]
 		item(id: String): Item
-		users: [User]
 		post(id: String): Post
-		posts(limit: Int): [Post]
+		posts(limit: Int, filter: PostsFilter): [Post]
+		users: [User]
 	}
 
 	type Mutation {
@@ -126,6 +135,7 @@ typeDefs = """
 			title: String
 			link: String
 			status: String
+			published: Boolean
 		): Post
 
 		removePost(
@@ -137,11 +147,29 @@ typeDefs = """
 			id: String!
 		): Post
 
+		removeItem(
+			id: String!
+		): Item
+
 		updateItem(
 			id: String!
 			active: Boolean
 			name: String
 			full_name: String
+			link: String
+			depth: Int
+			concurrency: Int
+			schemas: String
+			parseInterval: Int
+			data: ItemDataInput
+			owner: String
+		): Item
+
+		addItem(
+			active: Boolean
+			name: String
+			full_name: String
+			link: String
 			depth: Int
 			concurrency: Int
 			schemas: String
@@ -152,11 +180,20 @@ typeDefs = """
 
 	}
 
+	type ItemSubscribtion {
+		mutation: String
+		node: Item
+	}
+	type PostSubscribtion {
+		mutation: String
+		node: Post
+	}
+
 	type Subscription {
 		PostAdd: Post
-		PostChange: Post
 		PostRemove: Post
-		ItemChange: Item
+		PostChange: PostSubscribtion
+		ItemChange: ItemSubscribtion
 	}
 
 	schema {
@@ -197,18 +234,32 @@ resolvers =
 			# 	return
 
 		post: (_, {id}) -> r.table('Post').get(id).run()
-		posts: (_, {limit}) -> r.table('Post').orderBy(r.desc('parsed_at')).limit(limit || 999).run()
+		posts: (_, a) ->
+			f = {}
+			f = {published: a.filter.published == 'true'} if a.filter.published
+			r.table('Post')
+				.filter( (doc) ->
+					if a.filter.itemIds?.length > 0
+						return r.expr(a.filter.itemIds).contains(doc('itemId'))
+					doc
+				)
+				.filter(f)
+				.filter((x) ->
+					x('title').match("(?i)#{a.filter.searchQuery || ''}")
+				)
+				.orderBy(r.desc('parsed_at')).limit(a.limit || 999).run()
 
 	Mutation:
 		updatePost: (_, a) ->
 			updateModel('Post', a)
 		removePosts: (_, a) ->
-			r.table('Post').filter({ itemId: a.id }).delete().run().then ->
-				r.table('Item').get(a.id).then (item) ->
-					item.postsCount = 0
-					pubsub.publish("ItemChange", {"ItemChange": {id: item.id, postsCount: item.postsCount}})
-					return
+			await r.table('Post').filter({ itemId: a.id }).delete().run()
+			r.table('Item').get(a.id).then (item) ->
+				item.postsCount = 0
+				pubsub.publish("ItemChange", {"ItemChange": {mutation: 'UPDATED', node: item}})
+				# pubsub.publish("ItemChange", {"ItemChange": {id: item.id, postsCount: item.postsCount}})
 				return
+			return
 		removePost: (_, a) ->
 			await r.table('Post').get(a.id).delete().run()
 			postsCount = await r.table('Post').filter({itemId:a.itemId}).count().run()
@@ -216,6 +267,41 @@ resolvers =
 				id: a.itemId
 				postsCount: postsCount
 			return
+		removeItem: (_, a) ->
+			# console.log a
+			r.table("Item").get(a.id).delete().run()
+			return
+		addItem: (_, a) ->
+			# console.log a
+			for key in ['name', 'full_name', 'link']
+				unless a[key] && a[key].length > 0
+					return Error "Fill form properly"
+			item = await r.table('Item').filter({name: a.name}).count().run()
+			if item > 0
+				return new Error "Name #{a.name} allready exist!"
+
+			a = {
+				a...
+				loading: false
+				status: ''
+				nextParseDate: new Date
+				data:
+					progress: 0
+			}
+
+			item = await r.table('Item').insert(a, {returnChanges:true}).run()
+			# console.log '================'
+			# console.log item
+			item = item.changes.new_val
+			return item || a
+
+			# mustExist = ['name', 'full_name', 'owner']
+			# for key, value of a
+				# body...
+			# fs.writeFile "./crawler/items/#{a.name}.coffee", a.schemas, (err) ->
+			# 	if err then return console.log(err)
+			# 	return
+			# return new Error 'bjkasfbjkasfbjkasfbjkjbkfsa'
 		updateItem: (_, a) ->
 			if a.schemas
 				fs.writeFile "./crawler/items/#{a.name}.coffee", a.schemas, (err) ->
@@ -245,8 +331,11 @@ resolvers =
 		ItemChange:
 			subscribe: -> pubsub.asyncIterator('ItemChange')
 			# resolve: (payload, args, context, info) ->
-			# 	console.log payload
-			# 	payload
+			# 	console.log payload['ItemChange']
+			# 	{
+			# 		mutation: 'LJKASF'
+			# 		payload: payload['ItemChange']
+			# 	}
 
 
 updateModel = (model, payload) ->
@@ -270,11 +359,11 @@ publishChanges = (model, cursor) ->
 	cursor.each (err, x) ->
 		switch x.type
 			when 'change'
-				pubsub.publish("#{model}Change", {"#{model}Change": x.new_val})
+				pubsub.publish("#{model}Change", {"#{model}Change": {mutation: 'UPDATED', node: x.new_val}})
 			when 'add'
-				pubsub.publish("#{model}Add", {"#{model}Add": x.new_val})
+				pubsub.publish("#{model}Change", {"#{model}Change": {mutation: 'CREATED', node: x.new_val}})
 			when 'remove'
-				pubsub.publish("#{model}Remove", {"#{model}Remove": x.old_val})
+				pubsub.publish("#{model}Change", {"#{model}Change": {mutation: 'DELETED', node: x.old_val}})
 				# if model is 'Post'
 				# 	console.log "DELETE POST: ", x
 				# 	pubsub.publish("PostRemove", {"PostRemove": x.old_val.id})

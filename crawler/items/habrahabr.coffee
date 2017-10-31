@@ -18,7 +18,7 @@ module.exports =
 				next_link:
 					'$rule': 'a#next_page'
 					'$sanitizer': ($elem) ->
-						return 'https://habrahabr.ru/' + $elem.attr('href')
+						return 'https://habrahabr.ru' + $elem.attr('href')
 			)
 		post: ->
 			return new Gurkha(
