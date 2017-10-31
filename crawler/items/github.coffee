@@ -4,7 +4,7 @@ module.exports =
 	{
 		page: ->
 			return new Gurkha(
-				{
+				{ 
 					posts:
 						'$rule': '.blog-post'
 						title:
@@ -19,11 +19,11 @@ module.exports =
 							'$rule': '.blog-post .blog-post-meta li.meta-item:first-child'
 							'$sanitizer': ($elem) ->
 								$elem.text()
-
+								
 					next_link:
-						'$rule': '.pagination *:nth-child(2)'
+						'$rule': 'a.next_page'
 						'$sanitizer': ($elem) ->
-							$elem.attr('href')
+							'https://github.com'+$elem.attr('href')
 					}
 					{
 						options:
