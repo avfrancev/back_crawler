@@ -11,3 +11,4 @@ module.exports =
 	prod:
 		cert: '/etc/letsencrypt/live/avfrancev.ddns.net/cert.pem'
 		key: '/etc/letsencrypt/live/avfrancev.ddns.net/privkey.pem'
+		TEST: ''
