@@ -1,3 +1,0 @@
-{
-  "ignore": ["node-modules", "crawler/items/*"] 
-}
