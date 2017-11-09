@@ -21,11 +21,7 @@ needle.defaults
 updateModel = (model, payload) ->
 	r.table(model).update(payload, {returnChanges:true}).run().then (data, err) ->
 		if err then console.error err; return err
-		if data.changes.length > 0
-			pubsub.publish("#{model}Change", {"#{model}Change": data.changes[0].new_val})
-			data.changes[0].new_val
-		else
-			return r.table("#{model}").get(payload.id)
+		r.table("#{model}").get(payload.id)
 
 errorCount = 0
 
