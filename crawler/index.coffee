@@ -9,7 +9,6 @@ log     = require('cllc')(module)
 
 async = require 'async'
 
-DB = require('./DB')(config)
 r = require('rethinkdbdash')({db: 'horizon'})
 
 needle.defaults
