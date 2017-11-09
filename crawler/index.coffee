@@ -1,28 +1,57 @@
-
-Rx = require 'rxjs'
-needle = require 'needle'
+fs      = require 'fs'
+fse     = require 'fs-extra'
+needle  = require('needle')
+moment  = require 'moment'
 webshot = require('webshot')
-schedule = require('node-schedule')
-# cronParser = require('cron-parser')
-# toml = require('toml')
-path = require('path')
-fs = require('fs')
-# exec = require('child_process').exec
+cheerio = require 'cheerio'
+config  = require '../config'
+log     = require('cllc')(module)
+
+async = require 'async'
+
+DB = require('./DB')(config)
+r = require('rethinkdbdash')({db: 'horizon'})
+
+needle.defaults
+	open_timeout: 4400
+	compressed:   true
+	parse_response: true
 
 
 
+errorCount = 0
 
+getBody = (url, post, l) ->
+	result =
+		body: ''
+		stats:
+			start: new Date().getTime()
 
-# ============== Local Modules ==============
-r = undefined
-DB = undefined
-jobs = undefined
-config = undefined
-# ============== Local Modules ==============
+	if post
+		result = Object.assign result, post
 
+	needle('get', url)
+	.then (res) ->
+		errorCount = 0
+		result.body = res.body
+		result.stats.stop = new Date().getTime()
+		result.stats.parsingTime = result.stats.stop - result.stats.start
+		result.stats.size = result.body.length
+		return result
+	.catch (err) ->
+		if ++errorCount > 5
+			return Promise.reject(err)
+		# if post
+		# 	l.error "Repeat post :: #{post.title}"
+		# else
+		l.error err
+		await sleep 1200
+		return getBody url, post, l
 
+sleep = (ms) ->
+	new Promise (resolve) ->
+		setTimeout resolve, ms
 
-# ============== TEST ==============
 checkIfPostExist = (post) ->
 	new Promise (resolve, reject) ->
 		r.table('Post').filter(r.row('link').eq(post.link)).then (result) ->
@@ -34,246 +63,213 @@ checkIfPostExist = (post) ->
 			return
 		return
 
+contentAnalize = (content) ->
+	unless content and content.length > 0
+		return []
 
-__parsePost = (post, item, schemas) ->
-	Rx.Observable
-		.fromPromise(checkIfPostExist(post))
-		# .delay(500)
-		.flatMap((x) ->
-			if x.isNewPost
-				# console.log "[+] #{x.post.title}"
-				Rx.Observable
-					.fromPromise(getBody(x.post.link, x.post))
-					.retryWhen( (errors) ->
-						console.log error
-						return errors.delay(2200)
-					)
-					.map((x) ->
-						# console.log __savePost { itemId:  }
-						# console.log __savePost
-						post = Object.assign {}, x, schemas.post().parse(x.body)[0]
-						delete post.body
-						if typeof post.images is 'string'
-							post.images = [post.images]
-						post.tags = post.tags || []
-						if typeof post.tags is 'string'
-							post.tags = [post.tags]
-						post.itemId = item.id
-						post.owner = item.owner
-						post.status = 'pending'
-						# post.timestamp = new Date().getTime().valueOf()
-						post.parsed_at = new Date().getTime()
-						# post.
-						# post.item =
-						# 	name: item.name
-						# 	full_name: item.full_name
-						# 	logo: item.logo
-						post
-						# Rx.Observable.fromPromise __savePost post
-					)
-					.concatMap((post) -> __savePost post)
-					.map((x) ->
-						post = x.changes[0].new_val
-						console.log "[+] #{post.title}", post
-						post
-					)
-					# .concatAll()
-					# .do(console.log)
-					# .concatMap((post) ->
-					# 	console.log post
-					# 	__savePost post
-					# )
-					# .do(console.log)
-					# .do(console.log )
+	corpus = {}
+	words = []
+	content.split(' ').forEach (word) ->
+		unless 4 < word.length < 20
+			return
+		if corpus[word]
+			corpus[word]++
+		else
+			corpus[word] = 1
+		return
+
+	for prop of corpus
+		if corpus[prop] > 2
+			words.push
+				word: prop
+				count: corpus[prop]
+
+	words.sort (a, b) ->
+		b.count - (a.count)
+
+	return words.slice(0,5)
+
+makeScreenshot = ({item, post}, done) ->
+	!fse.existsSync("/home/screenshots/#{item.name}") && fse.mkdirSync("/home/screenshots/#{item.name}")
+	# console.log "#{post.title}....."
+
+	options =
+		streamType: 'jpeg'
+		captureSelector: item.captureSelector
+		quality: 30
+
+	webshot post.link, "/home/screenshots/#{item.name}/#{post.id}.jpeg", options, (err) ->
+		console.log err if err
+		# console.log "+ ", post.title
+		DB.updateModel 'Post',
+			id: post.id
+			hasScreenshot: true
+		done()
+		return
+	return
+
+makeScreenshotQueue = async.queue(makeScreenshot, 1)
+
+parsePosts = (item, posts, schema, l) ->
+	parsedPagePostsCount = 0
+	item.data.PagePostsCount = posts.length
+	console.log posts
+	new Promise (resolve, reject) ->
+		for post in posts.reverse()
+			p = await checkIfPostExist post
+			++parsedPagePostsCount
+			# progress = Math.floor (100 / (item.depth)) * (item.data.depth - 1) + ((parsedPagePostsCount * (100 / item.depth)) / item.data.PagePostsCount)
+			progress = Math.floor (100 / (item.depth)) * (item.data.depth) + ((parsedPagePostsCount * (100 / (item.depth))) / item.data.PagePostsCount)
+			# console.log post.link
+			# await sleep 100
+			# ll parsedPagePostsCount
+			# l.step(1)
+			# log item.depth*item.data.PagePostsCount
+			if p.isNewPost
+				# l.warn "#{parsedPagePostsCount} [ - ] #{post.title}"
+				# else
+				# ll "#{parsedPagePostsCount} [ + ] #{post.title}"
+				try
+					b = await getBody post.link, post, l
+				catch err
+					console.log '124197254019827598178127498'
+					reject(err)
+					return
+
+				l "[ + ] #{post.title}"
+				parsed_body = schema.post().parse(b.body)[0]
+				keywords = contentAnalize parsed_body.content
+				# console.log post
+				delete b.body
+				delete b.content
+				post = {
+					post...
+					parsed_body...
+					b...
+					keywords
+				}
+				# console.log post
+				if typeof post.images is 'string'
+					post.images = [post.images]
+				post.tags = post.tags || []
+				if typeof post.tags is 'string'
+					post.tags = [post.tags]
+				post.itemId = item.id
+				post.owner = item.owner
+				post.parsed_at = new Date().getTime()
+				post.published = false
+
+				newPost = await r.table('Post').insert(post, {returnChanges: true}).run()
+
+				post = newPost.changes[0].new_val
+
+				# Take screeshot
+				makeScreenshotQueue.push({item, post}) if item.takeScreenshot
+
+
+			DB.updateModel 'Item',
+				id: item.id
+				data:
+					progress: progress
+					parsedPagePostsCount: parsedPagePostsCount
+
+		resolve()
+		return
+
+parsePage = ({ item, l }, done) ->
+	_done = done
+	delete require.cache[require.resolve("./items/#{item.name}.coffee")]
+	schema = require "./items/#{item.name}.coffee"
+
+	# Loop pages
+	try
+		# console.dir item
+		# console.log '==================='
+		{body} = await getBody(item.link, null, l)
+	catch err
+		# console.log err
+		# l.stop()
+		done(err, {item, l})
+		return
+
+	parsed_body = schema.page().parse(body)[0]
+	# l.log "=== PAGE ##{item.data.depth} ==="
+
+	try
+		await parsePosts item, parsed_body.posts, schema, l
+	catch err
+		done(err, {item,l})
+		return
+
+	if ++item.data.depth < item.depth && typeof parsed_body.next_link is 'string'
+		item.link = parsed_body.next_link
+		parsePage {item, l}, _done
+	else
+		done(null, {item, l})
+	return
+
+parseItem = ( item, done) ->
+	l = require('cllc')(item.name)
+	l "START"
+	# l.start("#{item.name} :: [%s \\ #{item.depth*item.data.PagePostsCount}]")
+
+	DB.updateModel 'Item',
+		id: item.id
+		loading: true
+		status: 'parsing'
+		data:
+			depth: 0
+			parsedPagePostsCount: 0
+
+	parsePage { item, l }, done
+	return
+
+q = async.queue(parseItem, 1)
+
+addItemToQueue = (id) ->
+	r.table('Item').get(id).then (item) ->
+
+		DB.updateModel 'Item',
+			id: item.id
+			status: 'queued'
+			data: progress: 0
+
+		q.push item, (err, data) ->
+			{item,l} = data
+			if err
+				status = 'error'
+				console.error 'ERROR :: ', err
 			else
-				# console.table x.post
-				# console.log "[-] #{x.post.title}"
-				return Rx.Observable.of(x.post).delay(2)
-		)
-		# .merge(3)
-		# .delay(500)
-		# .do(console.log )
+				status = 'success'
+				# console.log item.name
 
-__savePost = (post) ->
-	r.table('Post').insert(post, {returnChanges: true}).run()
+			DB.updateModel 'Item',
+				id: item.id
+				loading: false
+				status: status
+				lastParseDate: new Date().getTime()
 
-
-__parsePage = (item, link, schemas) ->
-	Rx.Observable.fromPromise(getBody(link))
-		# .retryWhen( (errors) ->
-		# 	console.log errors
-		# 	return errors.delay(2200)
-		# )
-		.map((x) ->
-			console.log schemas.page().parse(x.body)
-			schemas.page().parse(x.body)[0]
-		)
-		.do((x) -> console.log "-------- PAGE #{item.data.depth} --------" )
-		.concatMap(
-			( (x) ->
-				parsedPagePostsCount = 0
-				DB.updateModel 'Item',
-					id: item.id
-					data:
-						depth: item.data.depth
-						PagePostsCount: x.posts.length
-						parsedPagePostsCount: parsedPagePostsCount
-
-				Rx.Observable.from(x.posts)
-					.mergeMap(((post) -> __parsePost post, item, schemas), +item.concurrency)
-					# .do(console.log)
-					.flatMap((x) ->
-						unless x.id
-							# log = item.logs[item.logs.length-1]
-							# log.newPosts.push x
-							# console.log log
-							# updateItemLog(item.id, log)
-							console.log "SAVING/////"
-							# __savePost(item, x)
-							Rx.Observable.of(x)
-						else Rx.Observable.of(x)
-					)
-					.do( (xx) ->
-						++parsedPagePostsCount
-						progress = Math.floor (100 / (item.depth)) * (item.data.depth - 1) + ((parsedPagePostsCount * (100 / item.depth)) / item.data.PagePostsCount)
-						DB.updateModel 'Item',
-							id: item.id
-							data:
-								progress: progress
-								parsedPagePostsCount: parsedPagePostsCount
-					)
-					# .concatAll()
-					.toArray()
-
-			), (_item, posts) ->
-				{next_link: _item.next_link, posts}
-		)
-		.flatMap((x) ->
-			item.data.depth++
-			# x = schemas.page().parse(x.body)[0]
-			# console.log x.next_link
-			if item.data.depth <= item.depth
-				__parsePage(item, x.next_link, schemas)
-			else Rx.Observable.empty()
-		)
-
-
-__parseItem = (id) ->
-	if !id then console.error 'Specify the ID !'; return
-	new Promise (resolve) ->
-		console.log 'OARSING>>>>>>'
-		r.table('Log').insert({start: new Date().getTime()}, {returnChanges: true}).then (log) ->
-			r.table('Item').get(id).then (item) ->
-				console.warn "START #{item.full_name}"
-
-				item.data.depth = 1
-				schemas = require "./items/#{item.name}.coffee"
-
-				item.log =
-					startParse: new Date().getTime()
-					itemId: item.id
-					concurrency: item.concurrency
-					depth: item.depth
-					posts: []
-
-
-				DB.updateModel 'Item',
-					id: item.id
-					loading: true
-					status: 'parsing'
-					data:
-						depth: item.data.depth
-						parsedPagePostsCount: 0
-
-
-				__parsePage(item, item.link, schemas)
-					.subscribe(
-
-						complete: ->
-
-							item.log.stopParse = new Date().getTime()
-							item.log.parsingTime = item.log.stopParse - item.log.startParse
-							# updateItemLog(item.id, logs)
-							console.log item.log
-							setJob item
-							# nextParseDate = jobs.addMinutes new Date().getTime(), +item.parseInterval * 60 || config.parseInterval
-
-							DB.updateModel 'Item',
-								id: item.id
-								loading: false
-								status: ''
-								lastParseDate: new Date().getTime()
-
-							console.warn "COMPLETE #{item.full_name}"
-							resolve(item)
-							# emitter.emit 'parse', item.id
-							return
-					)
-				return
-			return
-		return
-
-
-getBody = (url, post) ->
-
-	result =
-		body: ''
-		stats:
-			start: new Date().getTime()
-
-	if post
-		result = Object.assign result, post
-
-	new Promise (resolve, reject) =>
-		options =
-			open_timeout: 5000
-			read_timeout: 5000
-			compressed:   true
-
-		stream = needle.get url, options
-
-		stream.on 'readable', ->
-			while chunk = @read()
-				result.body += chunk
-			return
-
-		# stream.on 'timeout', (err) ->
-		# 	console.log "timeout"
-		# 	console.error err
-		# 	return
-
-		stream.on 'err', (err) ->
-			console.log 'ERROR'
-			console.error err
-			reject err
-			# setTimeout ->
-			# 	console.log '.................'
-			# 	getBody url, post
-			# , 5000
-			return
-
-		stream.on 'end', (err) =>
-			result.stats.stop = new Date().getTime()
-			result.stats.parsingTime = result.stats.stop - result.stats.start
-			result.stats.size = result.body.length
-			resolve result
-			return
+			# l.stop()
+			# l 'FINISH'
+			setJob item
 
 		return
+	return
 
-# ============== TEST ==============
-
+# addItemToQueue '7e816d12-dfec-4b71-9e7b-1e78807085db'
 items = []
 
 setJob = (item, startParseDate) ->
+	l = require('cllc')(item.name)
 	if item.active
 		clearInterval items[item.id] if items[item.id]
 		nextParseDate = startParseDate || new Date().getTime() + item.parseInterval * 60 * 60 * 1000
 		interval = (new Date nextParseDate) - new Date().getTime()
-		console.log "Set job #{item.name}: ", new Date nextParseDate
+		l "Next job at: #{moment(nextParseDate).format("HH:mm:ss")}"
+		# console.log "Set job #{item.name}: ", moment(nextParseDate).format("HH:mm:ss")
 		items[item.id] = setInterval ->
 			# console.log item.parseInterval
-			emitter.emit 'parse', item.id
+			addItemToQueue item.id
 			# setJob item
 		, interval
 	else
@@ -281,45 +277,16 @@ setJob = (item, startParseDate) ->
 	DB.updateModel 'Item',
 		id:             item.id
 		nextParseDate:  nextParseDate
+	return
+
+r.table('Item').then (_items) ->
+	_items.map (item) ->
+		nextParseDate = item.nextParseDate if item.nextParseDate > new Date().getTime()
+		setJob item
+		return
 
 
-
-
-EventEmitter = require('events').EventEmitter
-emitter = new EventEmitter()
-
-Rx.Observable.fromEvent(emitter, 'parse')
-	.filter((x) -> x.length > 0)
-	.map( (x) ->
-		DB.updateModel 'Item',
-			id: x
-			status: 'queued'
-			data: progress: 0
-		console.log x
-		x
-	)
-	.concatMap((x) ->
-		__parseItem(x)
-	)
-	.subscribe()
-
-
-
-module.exports = (config) ->
-
-	module = {}
-
-	r = require('rethinkdbdash')({db: config.DBName})
-	DB = require('./DB.coffee')(config)
-	# jobs = require('./jobs.coffee')(config)
-
-	# r.table('Item').then (_items) ->
-	# 	_items.map (item) ->
-	# 		nextParseDate = item.nextParseDate if item.nextParseDate > new Date().getTime()
-	# 		setJob item, nextParseDate
-	# 		return
-
-	module.emitter = emitter
-	module.setJob = setJob
-
-	module
+module.exports = {
+	setJob: setJob
+	addItemToQueue: addItemToQueue
+}

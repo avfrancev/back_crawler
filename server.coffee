@@ -24,7 +24,7 @@ cfg = require './config.coffee'
 
 # crawler = require('./crawler/index.coffee')(cfg)
 
-{ addItemToQueue, setJob } = require './NEWTEST'
+{ addItemToQueue, setJob } = require './crawler/index.coffee'
 
 
 
