@@ -6,11 +6,15 @@ webshot = require('webshot')
 cheerio = require 'cheerio'
 config  = require '../config'
 log     = require('cllc')(module)
+{ PubSub } = require 'graphql-subscriptions'
 
 async = require 'async'
 
+pubsub = new PubSub()
+
 DB = require('./DB')(config)
 r = require('rethinkdbdash')({db: 'horizon'})
+
 
 needle.defaults
 	open_timeout: 4400
