@@ -133,6 +133,7 @@ parsePosts = (item, posts, schema, l) ->
 					b = await getBody post.link, post, l
 				catch err
 					console.log '124197254019827598178127498'
+					console.log 'master'
 					reject(err)
 					return
 
