@@ -18,12 +18,12 @@ module.exports =
 				next_link:
 					'$rule': 'a#next_page'
 					'$sanitizer': ($elem) ->
-						return 'https://habrahabr.ru/' + $elem.attr('href')
+						'https://habrahabr.ru' + $elem.attr('href')
 			)
 		post: ->
 			return new Gurkha(
 				images:
-					'$rule': '.content img'
+					'$rule': 'article.post_full img'
 					'$sanitizer': ($elem) ->
 						return $elem.attr('src')
 			)

@@ -7,6 +7,7 @@
 	"license": "ISC",
 	"dependencies": {
 		"apollo-server": "^0.3.3",
+		"archiver": "^2.1.0",
 		"async": "^2.5.0",
 		"bcrypt": "^1.0.2",
 		"bee-queue": "^1.1.0",
@@ -15,6 +16,7 @@
 		"cors": "^2.8.3",
 		"express": "^4.15.3",
 		"express-graphql": "^0.6.6",
+		"fs-extra": "^4.0.2",
 		"graphql": "^0.10.3",
 		"graphql-server-express": "^0.9.0",
 		"graphql-subscriptions": "^0.4.3",
@@ -39,7 +41,7 @@
 	},
 	"scripts": {
 		"dev": "export NODE_ENV=dev && DEBUG=#,#::* nodemon -e coffee --exec coffee -Mb server.coffee",
-		"prod": "export NODE_ENV=prod && nodemon -e coffee --exec coffee -Mb --nodejs --inspect server.coffee"
+		"prod": "export NODE_ENV=prod && nodemon -e coffee --exec coffee -Mb server.coffee"
 	},
 	"description": ""
 }

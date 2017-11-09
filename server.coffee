@@ -1,4 +1,6 @@
 fs                                  = require 'fs'
+fse                                 = require 'fs-extra'
+archiver                            = require('archiver')
 express                             = require 'express'
 cors                                = require 'cors'
 bodyParser                          = require 'body-parser'
@@ -10,8 +12,8 @@ jwt                                 = require("jwt-simple")
 { makeExecutableSchema }            = require 'graphql-tools'
 { SubscriptionServer }              = require 'subscriptions-transport-ws'
 { PubSub }                          = require 'graphql-subscriptions';
-https = require('https')
-http = require('http')
+https                               = require('https')
+http                                = require('http')
 
 pubsub = new PubSub()
 r      = require('rethinkdbdash')({db: 'horizon', timeout: 200})
@@ -55,6 +57,7 @@ typeDefs = """
 		full_name: String
 		active: Boolean
 		captureSelector: String
+		takeScreenshot: Boolean
 		link: String
 		logo: String
 		loading: Boolean
@@ -90,6 +93,11 @@ typeDefs = """
 		id: String!
 	}
 
+	input ItemInput {
+		id: String
+		name: String
+	}
+
 	type Stats {
 		start: String
 		stop: String
@@ -113,6 +121,7 @@ typeDefs = """
 		status: String
 		parsed_at: String
 		published: Boolean
+		hasScreenshot: String
 		itemId: String
 		stats: Stats
 		tags: [String]
@@ -140,11 +149,11 @@ typeDefs = """
 
 		removePost(
 			id: String!
-			itemId: String
+			item: ItemInput
 		): Post
 
 		removePosts(
-			id: String!
+			item: ItemInput!
 		): Post
 
 		removeItem(
@@ -157,7 +166,10 @@ typeDefs = """
 			name: String
 			full_name: String
 			link: String
+			logo: String
 			depth: Int
+			captureSelector: String
+			takeScreenshot: Boolean
 			concurrency: Int
 			schemas: String
 			parseInterval: Int
@@ -170,7 +182,10 @@ typeDefs = """
 			name: String
 			full_name: String
 			link: String
+			logo: String
 			depth: Int
+			captureSelector: String
+			takeScreenshot: Boolean
 			concurrency: Int
 			schemas: String
 			parseInterval: Int
@@ -252,25 +267,36 @@ resolvers =
 	Mutation:
 		updatePost: (_, a) ->
 			updateModel('Post', a)
+
+
 		removePosts: (_, a) ->
-			await r.table('Post').filter({ itemId: a.id }).delete().run()
-			r.table('Item').get(a.id).then (item) ->
-				item.postsCount = 0
-				pubsub.publish("ItemChange", {"ItemChange": {mutation: 'UPDATED', node: item}})
-				# pubsub.publish("ItemChange", {"ItemChange": {id: item.id, postsCount: item.postsCount}})
-				return
-			return
-		removePost: (_, a) ->
-			await r.table('Post').get(a.id).delete().run()
-			postsCount = await r.table('Post').filter({itemId:a.itemId}).count().run()
+			await r.table('Post').filter({ itemId: a.item.id }).delete().run()
+			fse.removeSync "/home/screenshots/#{a.item.name}"
 			updateModel 'Item',
-				id: a.itemId
-				postsCount: postsCount
+				id: a.item.id
+				postsCount: '-1'
+				data:
+					progress: 0
+			return
+
+		removePost: (_, a) ->
+			# console.log a
+			fs.unlink "/home/screenshots/#{a.item.name}/#{a.id}.jpeg", (err) ->
+				console.log err if err
+				# console.log "/home/screenshots/#{a.item.name}/#{a.id}.jpeg"
+				return
+
+			await r.table('Post').get(a.id).delete().run()
+			postsCount = await r.table('Post').filter({itemId:a.item.id}).count().run()
+			updateModel 'Item',
+				id: a.item.id
+				postsCount: postsCount + 10
 			return
 		removeItem: (_, a) ->
 			# console.log a
 			r.table("Item").get(a.id).delete().run()
 			return
+
 		addItem: (_, a) ->
 			# console.log a
 			for key in ['name', 'full_name', 'link']
@@ -283,11 +309,16 @@ resolvers =
 			a = {
 				a...
 				loading: false
-				status: ''
+				status: 'success'
 				nextParseDate: new Date
 				data:
 					progress: 0
+					depth: 0
 			}
+
+			fs.writeFile "./crawler/items/#{a.name}.coffee", a.schemas, (err) ->
+				if err then return console.log(err)
+				return
 
 			item = await r.table('Item').insert(a, {returnChanges:true}).run()
 			# console.log '================'
@@ -295,30 +326,39 @@ resolvers =
 			item = item.changes.new_val
 			return item || a
 
-			# mustExist = ['name', 'full_name', 'owner']
-			# for key, value of a
-				# body...
-			# fs.writeFile "./crawler/items/#{a.name}.coffee", a.schemas, (err) ->
-			# 	if err then return console.log(err)
-			# 	return
-			# return new Error 'bjkasfbjkasfbjkasfbjkjbkfsa'
 		updateItem: (_, a) ->
 			if a.schemas
 				fs.writeFile "./crawler/items/#{a.name}.coffee", a.schemas, (err) ->
-					if err then return console.log(err)
+					if err then console.log(err)
 					return
-			r.table('Item').get(a.id).then (_item) ->
-				r.table('Item').update(a, {returnChanges:true}).run().then (data, err) ->
-					if err then console.error err; return err
-					if data.changes.length > 0
-						if a.parseInterval and a.parseInterval != _item.parseInterval
-							_item.parseInterval = a.parseInterval
-							setJob _item
-							# console.log "parseInterval changed", a.parseInterval
+			# old_item = await r.table('Item').get(a.id).run()
+			# console.log ' 2 -------'
+			item = await r.table('Item').get(a.id).update(a, {returnChanges:true}).run()
+			if item.changes.length > 0
+				{ old_val, new_val } = item.changes[0]
+				if a.parseInterval and a.parseInterval != old_val.parseInterval
+					setJob new_val
+				return new_val
+			return a
+					# _item.parseInterval = a.parseInterval
 
-						return data.changes[0].new_val
-					else
-						return r.table("Item").get(a.id)
+					# if data.changes.length > 0
+					#
+					# 	return data.changes[0].new_val
+					# else
+					# 	return r.table("Item").get(a.id)
+			# r.table('Item').get(a.id).then (_item) ->
+			# 	r.table('Item').update(a, {returnChanges:true}).run().then (data, err) ->
+			# 		if err then console.error err; return err
+			# 		if data.changes.length > 0
+			# 			if a.parseInterval and a.parseInterval != _item.parseInterval
+			# 				_item.parseInterval = a.parseInterval
+			# 				setJob _item
+			# 				# console.log "parseInterval changed", a.parseInterval
+			#
+			# 			return data.changes[0].new_val
+			# 		else
+			# 			return r.table("Item").get(a.id)
 
 
 	Subscription:
@@ -339,17 +379,27 @@ resolvers =
 
 
 updateModel = (model, payload) ->
+	{id, obj...} = payload
+	console.log "UPDATING :: #{model}"
 	# console.log payload
-	r.table(model).update(payload, {returnChanges:true}).run().then (data, err) ->
-		if err then console.error err; return err
-		if data.changes.length > 0
-			# pubsub.publish("#{model}Change", {"#{model}Change": data.changes[0].new_val})
-			if model is 'Item' and payload.parseInterval
-				console.log "parseInterval changed", payload.parseInterval
-			# console.log "asdasdasdasd"
-			return data.changes[0].new_val
-		else
-			return r.table("#{model}").get(payload.id)
+	r.table(model).get(id).update(obj).run()
+	# console.log M
+	# return M
+	# console.log M
+	# # console.log payload
+	# r.table(model).update(payload, {returnChanges:true}).run().then (data, err) ->
+	# 	console.log data
+	# 	if err then console.error err; return err
+	# 	if data.changes.length > 0
+	# 		# pubsub.publish("#{model}Change", {"#{model}Change": data.changes[0].new_val})
+	# 		if model is 'Item' and payload.parseInterval
+	# 			console.log "parseInterval changed", payload.parseInterval
+	# 		# console.log "asdasdasdasd"
+	# 		return data.changes[0].new_val
+	# 	else
+	# 		return r.table("#{model}").get(payload.id)
+	# # 	return
+	# # return
 
 
 r.table('Item').changes({includeTypes: true}).run().then (c) -> publishChanges('Item', c)
@@ -359,6 +409,7 @@ publishChanges = (model, cursor) ->
 	cursor.each (err, x) ->
 		switch x.type
 			when 'change'
+				# console.log 'CHANGES: ', model
 				pubsub.publish("#{model}Change", {"#{model}Change": {mutation: 'UPDATED', node: x.new_val}})
 			when 'add'
 				pubsub.publish("#{model}Change", {"#{model}Change": {mutation: 'CREATED', node: x.new_val}})
@@ -401,13 +452,30 @@ app.get '/parse', auth.authenticate(),  (req, res) ->
 	res.json parse: req.query.id
 	return
 
-app.get '/api/remove_item_posts', auth.authenticate(),  (req, res) ->
-	# console.log req.query.id
-	if req.query.id
-		r.table('Post').filter({itemId: req.query.id}).delete().then (x) ->
-
-	res.json parse: req.query.id
+app.get '/get-screenshots', (req, res) ->
+	# check folder existing
+	if !fse.existsSync("/home/screenshots/#{req.query.item}")
+		res.status(500).send error: "Folder not exist"
+		return
+	archive = archiver('zip')
+	archive.on 'error', (err) ->
+		res.status(500).send error: err.message
+		return
+	# #on stream closed we can end the request
+	res.on 'close', ->
+		console.log 'Archive wrote %d bytes', archive.pointer()
+		res.status(200).send('OK').end()
+	# #set the archive name
+	res.attachment "#{req.query.item}.zip"
+	# #this is the streaming magic
+	archive.pipe res
+	# archive.append fs.createReadStream('server.coffee'), name: 'file.txt'
+	archive.directory "/home/screenshots/#{req.query.item}", false
+	# #you can add a directory using directory function
+	# #archive.directory(dirPath, false);
+	archive.finalize()
 	return
+
 
 
 app.get '/auth/user', auth.authenticate(), (req, res) ->
@@ -441,6 +509,7 @@ app.post '/auth/login', (req, res) ->
 		res.sendStatus 401
 	return
 
+console.log process.env.NODE_ENV
 if process.env.NODE_ENV is 'prod'
 
 	options =

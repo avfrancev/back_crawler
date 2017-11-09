@@ -1,8 +1,11 @@
-needle = require('needle')
-moment = require 'moment'
+fs      = require 'fs'
+fse     = require 'fs-extra'
+needle  = require('needle')
+moment  = require 'moment'
+webshot = require('webshot')
 cheerio = require 'cheerio'
-config = require './config'
-log = require('cllc')(module)
+config  = require './config'
+log     = require('cllc')(module)
 
 async = require 'async'
 
@@ -10,7 +13,7 @@ DB = require('./crawler/DB')(config)
 r = require('rethinkdbdash')({db: 'horizon'})
 
 needle.defaults
-	open_timeout: 1500
+	open_timeout: 4400
 	compressed:   true
 	parse_response: true
 
@@ -86,18 +89,41 @@ contentAnalize = (content) ->
 
 	return words.slice(0,5)
 
+makeScreenshot = ({item, post}, done) ->
+	!fse.existsSync("/home/screenshots/#{item.name}") && fse.mkdirSync("/home/screenshots/#{item.name}")
+	# console.log "#{post.title}....."
+
+	options =
+		streamType: 'jpeg'
+		captureSelector: item.captureSelector
+		quality: 30
+
+	webshot post.link, "/home/screenshots/#{item.name}/#{post.id}.jpeg", options, (err) ->
+		console.log err if err
+		# console.log "+ ", post.title
+		DB.updateModel 'Post',
+			id: post.id
+			hasScreenshot: true
+		done()
+		return
+	return
+
+makeScreenshotQueue = async.queue(makeScreenshot, 1)
+
 parsePosts = (item, posts, schema, l) ->
 	parsedPagePostsCount = 0
+	item.data.PagePostsCount = posts.length
+	console.log posts
 	new Promise (resolve, reject) ->
-		for post in posts
+		for post in posts.reverse()
 			p = await checkIfPostExist post
 			++parsedPagePostsCount
 			# progress = Math.floor (100 / (item.depth)) * (item.data.depth - 1) + ((parsedPagePostsCount * (100 / item.depth)) / item.data.PagePostsCount)
 			progress = Math.floor (100 / (item.depth)) * (item.data.depth) + ((parsedPagePostsCount * (100 / (item.depth))) / item.data.PagePostsCount)
 			# console.log post.link
-			await sleep 100
+			# await sleep 100
 			# ll parsedPagePostsCount
-			l.step(1)
+			# l.step(1)
 			# log item.depth*item.data.PagePostsCount
 			if p.isNewPost
 				# l.warn "#{parsedPagePostsCount} [ - ] #{post.title}"
@@ -131,8 +157,15 @@ parsePosts = (item, posts, schema, l) ->
 				post.itemId = item.id
 				post.owner = item.owner
 				post.parsed_at = new Date().getTime()
+				post.published = false
 
-				r.table('Post').insert(post, {returnChanges: true}).run()
+				newPost = await r.table('Post').insert(post, {returnChanges: true}).run()
+
+				post = newPost.changes[0].new_val
+
+				# Take screeshot
+				makeScreenshotQueue.push({item, post}) if item.takeScreenshot
+
 
 			DB.updateModel 'Item',
 				id: item.id
@@ -145,6 +178,7 @@ parsePosts = (item, posts, schema, l) ->
 
 parsePage = ({ item, l }, done) ->
 	_done = done
+	delete require.cache[require.resolve("./crawler/items/#{item.name}.coffee")]
 	schema = require "./crawler/items/#{item.name}.coffee"
 
 	# Loop pages
@@ -177,7 +211,7 @@ parsePage = ({ item, l }, done) ->
 parseItem = ( item, done) ->
 	l = require('cllc')(item.name)
 	l "START"
-	l.start("#{item.name} :: [%s \\ #{item.depth*item.data.PagePostsCount}]")
+	# l.start("#{item.name} :: [%s \\ #{item.depth*item.data.PagePostsCount}]")
 
 	DB.updateModel 'Item',
 		id: item.id
@@ -207,7 +241,7 @@ addItemToQueue = (id) ->
 				console.error 'ERROR :: ', err
 			else
 				status = 'success'
-				console.log item.name
+				# console.log item.name
 
 			DB.updateModel 'Item',
 				id: item.id
@@ -215,7 +249,7 @@ addItemToQueue = (id) ->
 				status: status
 				lastParseDate: new Date().getTime()
 
-			l.stop()
+			# l.stop()
 			# l 'FINISH'
 			setJob item
 

@@ -5,20 +5,16 @@ module.exports =
 		page: ->
 			return new Gurkha(
 				posts:
-					'$rule': '.post'
-					title: '.post__title_link'
+					'$rule': '#newslist article'
+					title: 'h2 a'
 					link:
-						'$rule': '.post__title_link'
+						'$rule': 'h2 a'
 						'$sanitizer': ($elem) ->
 							return $elem.attr('href')
-					posted_at:
-						'$rule': '.post__time_published'
-						'$sanitizer': ($elem) ->
-							$elem.text()
 				next_link:
-					'$rule': 'a#next_page'
+					'$rule': '#newslist a.more'
 					'$sanitizer': ($elem) ->
-						return 'https://habrahabr.ru/' + $elem.attr('href')
+						return 'http://www.echojs.com' + $elem.attr('href')
 			)
 		post: ->
 			return new Gurkha(
