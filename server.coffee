@@ -21,16 +21,7 @@ r      = require('rethinkdbdash')({db: 'horizon', timeout: 200})
 
 cfg = require './config.coffee'
 
-
-# crawler = require('./crawler/index.coffee')(cfg)
-
 { addItemToQueue, setJob } = require './crawler/index.coffee'
-
-
-
-# setTimeout ->
-# 	crawler.addItemToQueue('a8f18010-45a6-4e3d-bee6-df8da404806b')
-# , 3000
 
 app = express()
 
@@ -222,7 +213,6 @@ typeDefs = """
 
 
 resolvers =
-	# Post: -> { id: 1, name: '12312312' }
 	User:
 		items: (user, args) -> r.table('Item').filter({owner: user.id}).run()
 		posts: (user, args) -> r.table('Post').filter({owner: user.id}).run()
@@ -240,14 +230,6 @@ resolvers =
 		items: -> r.table('Item').run()
 		users: -> r.table('users').run()
 		item: (_, {id}) -> r.table('Item').get(id).run()
-			# new Promise (resolve) ->
-			# 	r.table('Item').get(id).run().then (data) ->
-			# 		setTimeout ->
-			# 			resolve data
-			# 		, 1000
-			# 		return
-			# 	return
-
 		post: (_, {id}) -> r.table('Post').get(id).run()
 		posts: (_, a) ->
 			f = {}
@@ -280,10 +262,8 @@ resolvers =
 			return
 
 		removePost: (_, a) ->
-			# console.log a
 			fs.unlink "/home/screenshots/#{a.item.name}/#{a.id}.jpeg", (err) ->
 				console.log err if err
-				# console.log "/home/screenshots/#{a.item.name}/#{a.id}.jpeg"
 				return
 
 			await r.table('Post').get(a.id).delete().run()
@@ -293,12 +273,10 @@ resolvers =
 				postsCount: postsCount + 10
 			return
 		removeItem: (_, a) ->
-			# console.log a
 			r.table("Item").get(a.id).delete().run()
 			return
 
 		addItem: (_, a) ->
-			# console.log a
 			for key in ['name', 'full_name', 'link']
 				unless a[key] && a[key].length > 0
 					return Error "Fill form properly"
@@ -321,8 +299,6 @@ resolvers =
 				return
 
 			item = await r.table('Item').insert(a, {returnChanges:true}).run()
-			# console.log '================'
-			# console.log item
 			item = item.changes.new_val
 			return item || a
 
@@ -331,8 +307,6 @@ resolvers =
 				fs.writeFile "./crawler/items/#{a.name}.coffee", a.schemas, (err) ->
 					if err then console.log(err)
 					return
-			# old_item = await r.table('Item').get(a.id).run()
-			# console.log ' 2 -------'
 			item = await r.table('Item').get(a.id).update(a, {returnChanges:true}).run()
 			if item.changes.length > 0
 				{ old_val, new_val } = item.changes[0]
@@ -340,25 +314,6 @@ resolvers =
 					setJob new_val
 				return new_val
 			return a
-					# _item.parseInterval = a.parseInterval
-
-					# if data.changes.length > 0
-					#
-					# 	return data.changes[0].new_val
-					# else
-					# 	return r.table("Item").get(a.id)
-			# r.table('Item').get(a.id).then (_item) ->
-			# 	r.table('Item').update(a, {returnChanges:true}).run().then (data, err) ->
-			# 		if err then console.error err; return err
-			# 		if data.changes.length > 0
-			# 			if a.parseInterval and a.parseInterval != _item.parseInterval
-			# 				_item.parseInterval = a.parseInterval
-			# 				setJob _item
-			# 				# console.log "parseInterval changed", a.parseInterval
-			#
-			# 			return data.changes[0].new_val
-			# 		else
-			# 			return r.table("Item").get(a.id)
 
 
 	Subscription:
@@ -370,36 +325,12 @@ resolvers =
 			subscribe: -> pubsub.asyncIterator('PostChange')
 		ItemChange:
 			subscribe: -> pubsub.asyncIterator('ItemChange')
-			# resolve: (payload, args, context, info) ->
-			# 	console.log payload['ItemChange']
-			# 	{
-			# 		mutation: 'LJKASF'
-			# 		payload: payload['ItemChange']
-			# 	}
 
 
 updateModel = (model, payload) ->
 	{id, obj...} = payload
 	console.log "UPDATING :: #{model}"
-	# console.log payload
 	r.table(model).get(id).update(obj).run()
-	# console.log M
-	# return M
-	# console.log M
-	# # console.log payload
-	# r.table(model).update(payload, {returnChanges:true}).run().then (data, err) ->
-	# 	console.log data
-	# 	if err then console.error err; return err
-	# 	if data.changes.length > 0
-	# 		# pubsub.publish("#{model}Change", {"#{model}Change": data.changes[0].new_val})
-	# 		if model is 'Item' and payload.parseInterval
-	# 			console.log "parseInterval changed", payload.parseInterval
-	# 		# console.log "asdasdasdasd"
-	# 		return data.changes[0].new_val
-	# 	else
-	# 		return r.table("#{model}").get(payload.id)
-	# # 	return
-	# # return
 
 
 r.table('Item').changes({includeTypes: true}).run().then (c) -> publishChanges('Item', c)
@@ -409,18 +340,11 @@ publishChanges = (model, cursor) ->
 	cursor.each (err, x) ->
 		switch x.type
 			when 'change'
-				# console.log 'CHANGES: ', model
 				pubsub.publish("#{model}Change", {"#{model}Change": {mutation: 'UPDATED', node: x.new_val}})
 			when 'add'
 				pubsub.publish("#{model}Change", {"#{model}Change": {mutation: 'CREATED', node: x.new_val}})
 			when 'remove'
 				pubsub.publish("#{model}Change", {"#{model}Change": {mutation: 'DELETED', node: x.old_val}})
-				# if model is 'Post'
-				# 	console.log "DELETE POST: ", x
-				# 	pubsub.publish("PostRemove", {"PostRemove": x.old_val.id})
-
-
-
 
 
 
@@ -430,12 +354,10 @@ schema = makeExecutableSchema(
 
 
 
-
 app.use '/graphql', graphqlExpress(schema: schema)
 
 app.use '/graphiql', graphiqlExpress(
 	endpointURL: '/graphql'
-	# subscriptionsEndpoint: SUBSCRIPTIONS_PATH
 	)
 
 auth = require("./auth.coffee")(r)
@@ -446,14 +368,11 @@ app.get '/', (req, res) ->
 	return
 
 app.get '/parse', auth.authenticate(),  (req, res) ->
-	# crawler.emitter.emit 'parse', req.query.id
 	addItemToQueue req.query.id
-	# console.log req.query.id
 	res.json parse: req.query.id
 	return
 
 app.get '/get-screenshots', (req, res) ->
-	# check folder existing
 	if !fse.existsSync("/home/screenshots/#{req.query.item}")
 		res.status(500).send error: "Folder not exist"
 		return
@@ -461,18 +380,12 @@ app.get '/get-screenshots', (req, res) ->
 	archive.on 'error', (err) ->
 		res.status(500).send error: err.message
 		return
-	# #on stream closed we can end the request
 	res.on 'close', ->
 		console.log 'Archive wrote %d bytes', archive.pointer()
 		res.status(200).send('OK').end()
-	# #set the archive name
 	res.attachment "#{req.query.item}.zip"
-	# #this is the streaming magic
 	archive.pipe res
-	# archive.append fs.createReadStream('server.coffee'), name: 'file.txt'
 	archive.directory "/home/screenshots/#{req.query.item}", false
-	# #you can add a directory using directory function
-	# #archive.directory(dirPath, false);
 	archive.finalize()
 	return
 
@@ -510,6 +423,7 @@ app.post '/auth/login', (req, res) ->
 	return
 
 console.log process.env.NODE_ENV
+
 if process.env.NODE_ENV is 'prod'
 
 	options =
@@ -536,7 +450,3 @@ new SubscriptionServer(
 		server: httpServer
 	}
 )
-
-# server.listen cfg.PORT, ->
-# 	console.log "API Server is now running on http://localhost:#{cfg.PORT}/graphql"
-# 	console.log "API Subscriptions server is now running on ws://localhost:#{cfg.PORT}#{cfg.SUBSCRIPTIONS_PATH}"

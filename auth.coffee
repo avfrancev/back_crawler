@@ -1,6 +1,5 @@
 passport = require('passport')
 passportJWT = require('passport-jwt')
-# users = require('./users.js')
 cfg = require('./config.coffee')
 ExtractJwt = passportJWT.ExtractJwt
 Strategy = passportJWT.Strategy

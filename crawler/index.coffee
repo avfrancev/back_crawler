@@ -19,6 +19,15 @@ needle.defaults
 
 
 
+updateModel = (model, payload) ->
+	r.table(model).update(payload, {returnChanges:true}).run().then (data, err) ->
+		if err then console.error err; return err
+		if data.changes.length > 0
+			pubsub.publish("#{model}Change", {"#{model}Change": data.changes[0].new_val})
+			data.changes[0].new_val
+		else
+			return r.table("#{model}").get(payload.id)
+
 errorCount = 0
 
 getBody = (url, post, l) ->
@@ -41,9 +50,6 @@ getBody = (url, post, l) ->
 	.catch (err) ->
 		if ++errorCount > 5
 			return Promise.reject(err)
-		# if post
-		# 	l.error "Repeat post :: #{post.title}"
-		# else
 		l.error err
 		await sleep 1200
 		return getBody url, post, l
@@ -91,7 +97,6 @@ contentAnalize = (content) ->
 
 makeScreenshot = ({item, post}, done) ->
 	!fse.existsSync("/home/screenshots/#{item.name}") && fse.mkdirSync("/home/screenshots/#{item.name}")
-	# console.log "#{post.title}....."
 
 	options =
 		streamType: 'jpeg'
@@ -100,8 +105,7 @@ makeScreenshot = ({item, post}, done) ->
 
 	webshot post.link, "/home/screenshots/#{item.name}/#{post.id}.jpeg", options, (err) ->
 		console.log err if err
-		# console.log "+ ", post.title
-		DB.updateModel 'Post',
+		updateModel 'Post',
 			id: post.id
 			hasScreenshot: true
 		done()
@@ -118,17 +122,9 @@ parsePosts = (item, posts, schema, l) ->
 		for post in posts.reverse()
 			p = await checkIfPostExist post
 			++parsedPagePostsCount
-			# progress = Math.floor (100 / (item.depth)) * (item.data.depth - 1) + ((parsedPagePostsCount * (100 / item.depth)) / item.data.PagePostsCount)
 			progress = Math.floor (100 / (item.depth)) * (item.data.depth) + ((parsedPagePostsCount * (100 / (item.depth))) / item.data.PagePostsCount)
-			# console.log post.link
-			# await sleep 100
-			# ll parsedPagePostsCount
-			# l.step(1)
-			# log item.depth*item.data.PagePostsCount
+
 			if p.isNewPost
-				# l.warn "#{parsedPagePostsCount} [ - ] #{post.title}"
-				# else
-				# ll "#{parsedPagePostsCount} [ + ] #{post.title}"
 				try
 					b = await getBody post.link, post, l
 				catch err
@@ -138,7 +134,6 @@ parsePosts = (item, posts, schema, l) ->
 				l "[ + ] #{post.title}"
 				parsed_body = schema.post().parse(b.body)[0]
 				keywords = contentAnalize parsed_body.content
-				# console.log post
 				delete b.body
 				delete b.content
 				post = {
@@ -147,7 +142,6 @@ parsePosts = (item, posts, schema, l) ->
 					b...
 					keywords
 				}
-				# console.log post
 				if typeof post.images is 'string'
 					post.images = [post.images]
 				post.tags = post.tags || []
@@ -162,11 +156,10 @@ parsePosts = (item, posts, schema, l) ->
 
 				post = newPost.changes[0].new_val
 
-				# Take screeshot
 				makeScreenshotQueue.push({item, post}) if item.takeScreenshot
 
 
-			DB.updateModel 'Item',
+			updateModel 'Item',
 				id: item.id
 				data:
 					progress: progress
@@ -180,19 +173,13 @@ parsePage = ({ item, l }, done) ->
 	delete require.cache[require.resolve("./items/#{item.name}.coffee")]
 	schema = require "./items/#{item.name}.coffee"
 
-	# Loop pages
 	try
-		# console.dir item
-		# console.log '==================='
 		{body} = await getBody(item.link, null, l)
 	catch err
-		# console.log err
-		# l.stop()
 		done(err, {item, l})
 		return
 
 	parsed_body = schema.page().parse(body)[0]
-	# l.log "=== PAGE ##{item.data.depth} ==="
 
 	try
 		await parsePosts item, parsed_body.posts, schema, l
@@ -210,9 +197,8 @@ parsePage = ({ item, l }, done) ->
 parseItem = ( item, done) ->
 	l = require('cllc')(item.name)
 	l "START"
-	# l.start("#{item.name} :: [%s \\ #{item.depth*item.data.PagePostsCount}]")
 
-	DB.updateModel 'Item',
+	updateModel 'Item',
 		id: item.id
 		loading: true
 		status: 'parsing'
@@ -228,7 +214,7 @@ q = async.queue(parseItem, 1)
 addItemToQueue = (id) ->
 	r.table('Item').get(id).then (item) ->
 
-		DB.updateModel 'Item',
+		updateModel 'Item',
 			id: item.id
 			status: 'queued'
 			data: progress: 0
@@ -240,22 +226,18 @@ addItemToQueue = (id) ->
 				console.error 'ERROR :: ', err
 			else
 				status = 'success'
-				# console.log item.name
 
-			DB.updateModel 'Item',
+			updateModel 'Item',
 				id: item.id
 				loading: false
 				status: status
 				lastParseDate: new Date().getTime()
 
-			# l.stop()
-			# l 'FINISH'
 			setJob item
 
 		return
 	return
 
-# addItemToQueue '7e816d12-dfec-4b71-9e7b-1e78807085db'
 items = []
 
 setJob = (item, startParseDate) ->
@@ -265,15 +247,12 @@ setJob = (item, startParseDate) ->
 		nextParseDate = startParseDate || new Date().getTime() + item.parseInterval * 60 * 60 * 1000
 		interval = (new Date nextParseDate) - new Date().getTime()
 		l "Next job at: #{moment(nextParseDate).format("HH:mm:ss")}"
-		# console.log "Set job #{item.name}: ", moment(nextParseDate).format("HH:mm:ss")
 		items[item.id] = setInterval ->
-			# console.log item.parseInterval
 			addItemToQueue item.id
-			# setJob item
 		, interval
 	else
 		nextParseDate = null
-	DB.updateModel 'Item',
+	updateModel 'Item',
 		id:             item.id
 		nextParseDate:  nextParseDate
 	return
